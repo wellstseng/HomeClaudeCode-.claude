@@ -6,6 +6,7 @@
 
 | 日期 | 變更 | 涉及檔案 |
 |------|------|---------|
+| 2026-03-03 | **工作流完善**：session ID prefix match、resume 後 atoms 重注入、Atom Last-used 自動刷新、sync_completed 清空 queue+files、computer-use MCP 修正、README.md 流程圖 | `server.js`, `workflow-guardian.py`, `README.md`, `Install-forAI.md` |
 | 2026-03-03 | **MCP 傳輸格式修正**：Content-Length header → JSONL（Claude Code v2.x 實際使用的格式）。protocolVersion 更新至 2025-11-25。Dashboard port heartbeat recovery（多實例自動接管）。同步修復 openclaw-notify-mcp。 | `tools/workflow-guardian-mcp/server.js`, `C:\OpenClawWorkspace\scripts\openclaw-notify-mcp.js` |
 | 2026-03-02 | Dashboard 改進：session 名稱顯示、Windows 路徑修正、Mute 按鈕、ended session 1 分鐘自動清理 | `tools/workflow-guardian-mcp/server.js` |
 | 2026-03-02 | 修復 4 項缺陷：Stop 訊息 context-aware、min_files_to_block 門檻、max_reminders 上限、mute 靜音機制 | `hooks/workflow-guardian.py`, `tools/workflow-guardian-mcp/server.js`, `workflow/config.json` |

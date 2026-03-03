@@ -74,11 +74,26 @@ _AIDocs/                         → ~/.claude/_AIDocs/  (可選，僅作參考)
     "command": "node",
     "args": ["{{HOME_PATH}}/.claude/tools/workflow-guardian-mcp/server.js"],
     "env": {}
+  },
+  "computer-use": {
+    "type": "stdio",
+    "command": "cmd",
+    "args": ["/c", "npx", "-y", "computer-use-mcp"],
+    "env": {}
   }
 }
 ```
 
 `{{HOME_PATH}}` 替換為目標機器的 HOME 絕對路徑（Windows: `C:\\Users\\USERNAME`，macOS/Linux: `/home/USERNAME`）。
+
+> **MCP 傳輸格式警告**
+>
+> Claude Code v2.x 使用 **JSONL** 傳輸格式（每行一個完整 JSON，以 `\n` 分隔），而非 LSP 風格的 Content-Length header。自寫 MCP server 必須：
+> - 以 JSONL 格式收發訊息（`{...}\n`）
+> - `protocolVersion` 設為 `2025-11-25`
+> - 違反上述格式將導致 30 秒超時 → `/mcp` 顯示 failed
+>
+> Windows 上使用 npx 的 MCP server 需加 `cmd /c` wrapper（如上方 computer-use 範例）。
 
 ### Step 5: 合併 settings.json — permissions 區段（可選）
 
@@ -125,9 +140,11 @@ _AIDocs/                         → ~/.claude/_AIDocs/  (可選，僅作參考)
 
 重啟 Claude Code（VS Code: `Ctrl+Shift+P` → `Reload Window`），然後：
 
-1. 開啟 `http://127.0.0.1:3848` — 應看到 Dashboard
-2. 編輯任意檔案 → Dashboard 應出現新 session 卡片
-3. 嘗試結束對話 → Guardian 應阻止並提醒同步
+1. 執行 `/mcp` — 確認 `workflow-guardian` 狀態為 **connected**
+2. 開啟 `http://127.0.0.1:3848` — 應看到 Dashboard
+3. 編輯任意檔案 → Dashboard 應出現新 session 卡片
+4. 嘗試結束對話 → Guardian 應阻止並提醒同步
+5. 確認 `computer-use` 狀態為 connected（若已安裝）
 
 ---
 
@@ -145,9 +162,11 @@ _AIDocs/                         → ~/.claude/_AIDocs/  (可選，僅作參考)
 
 ## 系統概述（供 AI 理解上下文）
 
-本擴充包含兩個核心系統：
+本擴充包含兩個核心系統，透過 7 個階段（BOOT → RECALL → TRACK → REMIND → COMPACT → GATE → SYNC）管理 session 生命週期：
 
-1. **原子記憶**：跨 session 知識管理，兩層（全域/專案）、三級分類（[固]/[觀]/[臨]），索引式觸發載入
+1. **原子記憶**：跨 session 知識管理，兩層（全域/專案）、三級分類（[固]/[觀]/[臨]），索引式觸發載入，Last-used 自動刷新
 2. **Workflow Guardian**：hooks 事件驅動的工作流監督，自動追蹤修改、阻止未同步結束、提供 Dashboard 監控
 
-詳見 `_AIDocs/Architecture.md` 和 `memory/SPEC_Atomic_Memory_System.md`。
+MCP 傳輸格式：JSONL（`{...}\n`），protocolVersion `2025-11-25`。
+
+詳見 `README.md`（運作流程圖）、`_AIDocs/Architecture.md` 和 `memory/SPEC_Atomic_Memory_System.md`。

@@ -270,6 +270,8 @@ def handle_session_start(input_data: Dict[str, Any], config: Dict[str, Any]) -> 
     existing = read_state(session_id)
     if existing and source in ("compact", "resume"):
         state = existing
+        # Clear injected_atoms so atoms get re-injected after compact (context was truncated)
+        state["injected_atoms"] = []
         # Re-inject full context after compaction
         mod_count = len(state.get("modified_files", []))
         kq_count = len(state.get("knowledge_queue", []))
@@ -390,6 +392,26 @@ def handle_user_prompt_submit(
             lines.append("[Guardian:Memory] Trigger-matched atoms loaded:")
             lines.extend(atom_lines)
             state["injected_atoms"] = already_injected + newly_injected
+
+            # Auto-update Last-used timestamp in injected atom files
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            last_used_re = re.compile(r"^(- Last-used:\s*)\d{4}-\d{2}-\d{2}", re.MULTILINE)
+            for inj_name in newly_injected:
+                for (name, rel_path, triggers), base_dir in matched_with_dir:
+                    if name != inj_name:
+                        continue
+                    apath = (base_dir / rel_path) if rel_path else (base_dir / "memory" / f"{name}.md")
+                    if not apath.exists():
+                        break
+                    try:
+                        text = apath.read_text(encoding="utf-8-sig")
+                        if last_used_re.search(text):
+                            updated = last_used_re.sub(rf"\g<1>{today_str}", text)
+                            if updated != text:
+                                apath.write_text(updated, encoding="utf-8")
+                    except (OSError, UnicodeDecodeError):
+                        pass
+                    break
 
     # ─── Phase 2: Sync reminders (existing logic) ────────────────────
     mod_count = len(state.get("modified_files", []))

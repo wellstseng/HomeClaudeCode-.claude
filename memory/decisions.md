@@ -9,10 +9,13 @@
 ## 知識
 
 - [固] 版控同步支援 Git 和 SVN，自動偵測 .git/ 或 .svn/
-- [固] MCP servers 實際可用: playwright, openclaw-notify, workflow-guardian
-- [固] MCP servers 不存在（npm 404）: @anthropic-ai/computer-use, @anthropic-ai/browser-use — 可從 .claude.json 移除
+- [固] MCP servers 實際可用: playwright, openclaw-notify, workflow-guardian, computer-use
+- [固] computer-use 正確套件名: `computer-use-mcp`（社群維護），非 `@anthropic-ai/computer-use`（不存在）
+- [固] browser-use 需付費 API key（browser-use.com），暫不啟用；Playwright 已覆蓋瀏覽器自動化
 - [固] OpenClaw 的 atoms/ 目錄僅歸屬 OpenClaw，不作為 Claude Code 全域 atom 來源
-- [固] Workflow Guardian：hooks 事件驅動的工作流監督系統，自動追蹤修改、Stop 閘門阻止未同步結束
+- [固] Workflow Guardian：hooks 事件驅動的工作流監督系統，自動追蹤修改、Stop 閘門阻止未同步結束、Atom Last-used 自動刷新
+- [固] session ID 支援 prefix match（截短 8 碼即可操作 workflow_signal 等工具）
+- [固] sync_completed 信號自動清空 knowledge_queue + modified_files
 - [固] 工作結束同步須根據情境判斷適用步驟（有 _AIDocs 才更新 _CHANGELOG，有 .git/.svn 才版控）
 - [固] **MCP stdio 傳輸格式**: Claude Code v2.x 使用 JSONL（`{...}\n`），不是 Content-Length header。自寫 MCP server 必須用 JSONL + protocolVersion `2025-11-25`，否則 30 秒超時 failed
 

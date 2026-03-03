@@ -1,7 +1,7 @@
 # MyClaudeCode (.claude) — AI 分析文件索引
 
 > 本資料夾記錄 `~/.claude` 自訂擴充系統的架構與演進。
-> 最近更新：2026-03-02
+> 最近更新：2026-03-03
 
 ---
 
@@ -11,6 +11,7 @@
 |---|---------|------|
 | 1 | Architecture.md | 系統架構總覽：原子記憶 + Workflow Guardian + hooks |
 | 2 | _CHANGELOG.md | 變更記錄 |
+| 3 | ../README.md | 完整運作知識庫 + 7 階段流程圖（GitHub 入口） |
 
 ---
 

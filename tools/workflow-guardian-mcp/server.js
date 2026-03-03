@@ -60,6 +60,23 @@ function listStatePaths() {
   }
 }
 
+function resolveSessionId(prefix) {
+  // Support prefix matching: "3c7a47d0" → full UUID
+  // Direct hit: exact filename exists → fast path
+  const directPath = path.join(WORKFLOW_DIR, `state-${prefix}.json`);
+  try { if (fs.existsSync(directPath)) return prefix; } catch {}
+
+  // Prefix search: enumerate state files
+  const ids = listStatePaths().map((p) =>
+    path.basename(p).replace("state-", "").replace(".json", "")
+  );
+  const matches = ids.filter((id) => id.startsWith(prefix));
+  if (matches.length === 1) return matches[0];
+  if (matches.length === 0) return null;
+  // Ambiguous: return null (caller handles error)
+  return null;
+}
+
 function readState(sessionId) {
   const p = path.join(WORKFLOW_DIR, `state-${sessionId}.json`);
   try {
@@ -312,7 +329,11 @@ function handleToolCall(id, toolName, args) {
 
 function toolWorkflowStatus(id, args) {
   if (args.session_id) {
-    const state = readState(args.session_id);
+    const resolved = resolveSessionId(args.session_id);
+    if (!resolved) {
+      return sendToolResult(id, `No state found for session ${args.session_id}`);
+    }
+    const state = readState(resolved);
     if (!state) {
       return sendToolResult(id, `No state found for session ${args.session_id}`);
     }
@@ -353,7 +374,11 @@ function toolWorkflowStatus(id, args) {
 
 function toolWorkflowSignal(id, args) {
   const { session_id, signal } = args;
-  const state = readState(session_id);
+  const resolved = resolveSessionId(session_id);
+  if (!resolved) {
+    return sendToolResult(id, `No state found for session ${session_id}`, true);
+  }
+  const state = readState(resolved);
   if (!state) {
     return sendToolResult(id, `No state found for session ${session_id}`, true);
   }
@@ -366,6 +391,7 @@ function toolWorkflowSignal(id, args) {
       state.phase = "done";
       state.sync_pending = false;
       state.knowledge_queue = [];
+      state.modified_files = [];
       break;
     case "reset":
       state.phase = "working";
@@ -379,13 +405,17 @@ function toolWorkflowSignal(id, args) {
       break;
   }
 
-  writeState(session_id, state);
+  writeState(resolved, state);
   return sendToolResult(id, `Signal '${signal}' applied. Phase: ${state.phase}`);
 }
 
 function toolMemoryQueueAdd(id, args) {
   const { session_id, content, classification, trigger_context } = args;
-  const state = readState(session_id);
+  const resolved = resolveSessionId(session_id);
+  if (!resolved) {
+    return sendToolResult(id, `No state found for session ${session_id}`, true);
+  }
+  const state = readState(resolved);
   if (!state) {
     return sendToolResult(id, `No state found for session ${session_id}`, true);
   }
@@ -398,7 +428,7 @@ function toolMemoryQueueAdd(id, args) {
     at: new Date().toISOString(),
   });
   state.sync_pending = true;
-  writeState(session_id, state);
+  writeState(resolved, state);
 
   return sendToolResult(
     id,
@@ -408,14 +438,18 @@ function toolMemoryQueueAdd(id, args) {
 
 function toolMemoryQueueFlush(id, args) {
   const { session_id } = args;
-  const state = readState(session_id);
+  const resolved = resolveSessionId(session_id);
+  if (!resolved) {
+    return sendToolResult(id, `No state found for session ${session_id}`, true);
+  }
+  const state = readState(resolved);
   if (!state) {
     return sendToolResult(id, `No state found for session ${session_id}`, true);
   }
 
   const count = (state.knowledge_queue || []).length;
   state.knowledge_queue = [];
-  writeState(session_id, state);
+  writeState(resolved, state);
 
   return sendToolResult(id, `Flushed ${count} knowledge queue items.`);
 }
@@ -628,7 +662,7 @@ const httpServer = http.createServer((req, res) => {
   // API: get/delete single session
   const sessionMatch = pathname.match(/^\/api\/sessions\/([^/]+)$/);
   if (sessionMatch) {
-    const sid = sessionMatch[1];
+    const sid = resolveSessionId(sessionMatch[1]) || sessionMatch[1];
     if (req.method === "GET") {
       const state = readState(sid);
       if (!state) {
@@ -648,7 +682,7 @@ const httpServer = http.createServer((req, res) => {
   // API: send signal
   const signalMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/signal$/);
   if (signalMatch && req.method === "POST") {
-    const sid = signalMatch[1];
+    const sid = resolveSessionId(signalMatch[1]) || signalMatch[1];
     let body = "";
     req.on("data", (chunk) => (body += chunk));
     req.on("end", () => {
@@ -667,6 +701,7 @@ const httpServer = http.createServer((req, res) => {
             state.phase = "done";
             state.sync_pending = false;
             state.knowledge_queue = [];
+            state.modified_files = [];
             break;
           case "reset":
             state.phase = "working";
