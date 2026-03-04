@@ -4,7 +4,7 @@
 - Confidence: [固]
 - Trigger: RAG, vector, 向量, embedding, 語意, semantic, LanceDB, Ollama, 本地LLM, local LLM, sentence-transformers, qwen3-embedding, bge-m3
 - Last-used: 2026-03-04
-- Confirmations: 5
+- Confirmations: 6
 
 ## 知識
 
@@ -99,6 +99,16 @@ UserPromptSubmit (3s timeout)
 - [固] SPEC v2.1 完整更新：新增 §八 衝突偵測 + §九 Audit Trail
 - 完整計畫：`_AIDocs/AtomicMemory-v2.1-Plan.md`
 
+### v2.1 Episodic Memory + E2E 測試（已完成）
+
+- [固] Episodic atom 自動產生：session 結束時 `handle_session_end()` 呼叫 `_generate_episodic_atom()`
+- [固] 命名規則：`episodic-{YYYYMMDD}-{slug}.md`，同日多 session 自動 append `-2`
+- [固] Type=episodic, Confidence=[臨], TTL=24d, Expires-at 自動計算
+- [固] 觸發條件：修改 ≥1 檔案或 knowledge_queue ≥1，且 session ≥2 分鐘
+- [固] 自動產生 trigger + 更新 MEMORY.md index
+- [固] E2E 測試腳本：`~/.claude/tools/test-memory-v21.py`，9 tests 全通過
+- [固] 測試覆蓋：Write Gate (add/skip/ask), Supersedes, Decay --enforce, --compact-logs, Delete Propagation, Conflict Detection, Episodic Generation
+
 ### v2.1 品質驗證（已完成）
 
 - [固] 50-query 測試集：`~/.claude/tools/eval-ranked-search.py`（10 queries × 5 intents）
@@ -125,11 +135,13 @@ UserPromptSubmit (3s timeout)
 - 衝突掃描：`python ~/.claude/tools/memory-conflict-detector.py [--dry-run] [--atom X]`
 - 刪除 atom：`python ~/.claude/tools/memory-audit.py --delete <name> [--layer L] [--dry-run]`
 - 永久刪除：`python ~/.claude/tools/memory-audit.py --purge <name> [--layer L]`
+- E2E 測試：`python ~/.claude/tools/test-memory-v21.py [-v] [--test NAME] [--json]`
 
 ## 演化日誌
 
 | 日期 | 變更 | 來源 |
 |------|------|------|
+| 2026-03-04 | v2.1 Episodic Memory + E2E 測試完成：9/9 tests pass, episodic auto-gen in handle_session_end() | session 實作 |
 | 2026-03-04 | v2.1 品質驗證完成：50-query 測試集，Hybrid R@5=0.96, Hit@5=0.90, MRR=0.80，語意增量 +0.80 | session 實作 |
 | 2026-03-04 | v2.1 Sprint 3 完成：Type Decay + Supersedes + Log Compaction + Token Budget + Session-end Index + Audit Trail | session 實作 |
 | 2026-03-04 | v2.1 Sprint 2 完成：Intent 分類器 + Ranked Search + Related 載入 + Conflict Detector + Delete Propagation | session 實作 |

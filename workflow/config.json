@@ -30,6 +30,11 @@
     "dedup_score": 0.80,
     "skip_on_explicit_user": true
   },
+  "episodic": {
+    "auto_generate": true,
+    "min_files": 1,
+    "min_duration_seconds": 120
+  },
   "decay": {
     "enforce_on_audit": false,
     "staleness_thresholds": {"[固]": 90, "[觀]": 60, "[臨]": 30},

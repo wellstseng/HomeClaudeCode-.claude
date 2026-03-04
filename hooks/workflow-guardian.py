@@ -787,6 +787,244 @@ def handle_stop(input_data: Dict[str, Any], config: Dict[str, Any]) -> None:
     output_block(reason)
 
 
+# ─── Episodic Memory Auto-Generation (v2.1 Task #2) ─────────────────────────
+
+
+def _should_generate_episodic(state: Dict[str, Any], config: Dict[str, Any]) -> bool:
+    """Check if this session warrants an episodic atom."""
+    ep_cfg = config.get("episodic", {})
+    if not ep_cfg.get("auto_generate", True):
+        return False
+
+    mod_count = len(state.get("modified_files", []))
+    kq_count = len(state.get("knowledge_queue", []))
+    min_files = ep_cfg.get("min_files", 1)
+
+    if mod_count < min_files and kq_count == 0:
+        return False
+
+    # Skip very short sessions (< 2 minutes)
+    started = state.get("session", {}).get("started_at", "")
+    ended = state.get("ended_at", "")
+    if started and ended:
+        try:
+            t0 = datetime.fromisoformat(started.replace("Z", "+00:00"))
+            t1 = datetime.fromisoformat(ended.replace("Z", "+00:00"))
+            if (t1 - t0).total_seconds() < ep_cfg.get("min_duration_seconds", 120):
+                return False
+        except (ValueError, TypeError):
+            pass
+
+    return True
+
+
+def _extract_area(path_str: str) -> str:
+    """Extract a human-readable work area slug from a file path."""
+    path = path_str.replace("\\", "/")
+
+    # Known prefix mappings
+    home = str(Path.home()).replace("\\", "/")
+    claude_base = f"{home}/.claude/"
+    if path.startswith(claude_base):
+        rest = path[len(claude_base):]
+        seg = rest.split("/")[0]
+        area_map = {"memory": "memory-system", "tools": "memory-tools",
+                     "hooks": "guardian", "workflow": "guardian", "plans": "planning"}
+        return area_map.get(seg, seg)
+
+    # Strip home prefix
+    if path.startswith(home + "/"):
+        path = path[len(home) + 1:]
+    # Strip drive letter
+    if len(path) > 2 and path[1] == ":":
+        path = path[2:].lstrip("/")
+
+    parts = [p for p in path.split("/") if p]
+    # Take first 2 meaningful segments
+    slug_parts = parts[:2] if len(parts) >= 2 else parts[:1]
+    return "-".join(slug_parts).lower() if slug_parts else "misc"
+
+
+def _build_episodic_summary(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Build structured session summary from state."""
+    from collections import Counter
+
+    modified = state.get("modified_files", [])
+    area_counts: Counter = Counter()
+    for m in modified:
+        area = _extract_area(m.get("path", ""))
+        area_counts[area] += 1
+
+    work_areas = [{"area": a, "count": c} for a, c in area_counts.most_common()]
+    primary_area = work_areas[0]["area"] if work_areas else "session-work"
+
+    knowledge_items = []
+    for kq in state.get("knowledge_queue", []):
+        knowledge_items.append({
+            "content": kq.get("content", "")[:80],
+            "classification": kq.get("classification", "[臨]"),
+        })
+
+    atoms_referenced = list(state.get("injected_atoms", []))
+
+    return {
+        "work_areas": work_areas,
+        "knowledge_items": knowledge_items,
+        "atoms_referenced": atoms_referenced,
+        "files_modified": len(modified),
+        "primary_area": primary_area,
+    }
+
+
+def _derive_short_summary(primary_area: str) -> str:
+    """Generate a kebab-case slug for the episodic atom filename (<=30 chars, ASCII)."""
+    slug = primary_area.lower()
+    slug = re.sub(r"[^a-z0-9-]", "-", slug)
+    slug = re.sub(r"-+", "-", slug).strip("-")
+    return slug[:30] or "session-work"
+
+
+def _resolve_episodic_filename(memory_dir: Path, date_str: str, slug: str) -> Path:
+    """Resolve unique filename, handling same-day dedup."""
+    base = f"episodic-{date_str}-{slug}"
+    candidate = memory_dir / f"{base}.md"
+    if not candidate.exists():
+        return candidate
+    for i in range(2, 20):
+        candidate = memory_dir / f"{base}-{i}.md"
+        if not candidate.exists():
+            return candidate
+    return memory_dir / f"{base}-{int(datetime.now().timestamp()) % 10000}.md"
+
+
+def _generate_triggers(state: Dict[str, Any], work_areas: list) -> list:
+    """Auto-generate trigger keywords from session data."""
+    triggers = {"session", "episodic"}
+
+    for wa in work_areas:
+        for word in wa["area"].split("-"):
+            if len(word) >= 3:
+                triggers.add(word.lower())
+
+    for kq in state.get("knowledge_queue", []):
+        words = re.findall(r"\b[a-zA-Z]{4,}\b", kq.get("content", ""))
+        for w in words[:3]:
+            triggers.add(w.lower())
+
+    for atom_name in state.get("injected_atoms", []):
+        triggers.add(atom_name.lower())
+
+    return sorted(triggers)[:8]
+
+
+def _update_memory_index(memory_dir: Path, atom_name: str, triggers: list) -> None:
+    """Append a row to MEMORY.md atom index table."""
+    index_path = memory_dir / MEMORY_INDEX
+    if not index_path.exists():
+        return
+
+    text = index_path.read_text(encoding="utf-8-sig")
+    trigger_str = ", ".join(triggers)
+    new_row = f"| {atom_name} | memory/{atom_name}.md | {trigger_str} |"
+
+    lines = text.splitlines()
+    insert_idx = None
+    in_table = False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("| Atom") or stripped.startswith("|Atom"):
+            in_table = True
+            continue
+        if in_table:
+            if stripped.startswith("|---"):
+                continue
+            if stripped.startswith("|"):
+                insert_idx = i
+            else:
+                break
+
+    if insert_idx is not None:
+        lines.insert(insert_idx + 1, new_row)
+    else:
+        lines.append(new_row)
+
+    index_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _generate_episodic_atom(
+    session_id: str, state: Dict[str, Any], config: Dict[str, Any]
+) -> Optional[str]:
+    """Auto-generate an episodic atom summarizing this session.
+
+    Returns the filename of the generated atom, or None if skipped.
+    """
+    if not _should_generate_episodic(state, config):
+        return None
+
+    from datetime import timedelta
+
+    summary = _build_episodic_summary(state)
+    slug = _derive_short_summary(summary["primary_area"])
+    today = datetime.now().strftime("%Y-%m-%d")
+    date_compact = datetime.now().strftime("%Y%m%d")
+    expires = (datetime.now() + timedelta(days=24)).strftime("%Y-%m-%d")
+    triggers = _generate_triggers(state, summary["work_areas"])
+
+    atom_path = _resolve_episodic_filename(MEMORY_DIR, date_compact, slug)
+    atom_name = atom_path.stem
+
+    # Build knowledge lines
+    knowledge_lines = []
+    if summary["work_areas"]:
+        areas_str = ", ".join(
+            f"{wa['area']} ({wa['count']} files)" for wa in summary["work_areas"]
+        )
+        knowledge_lines.append(f"- [臨] 工作區域: {areas_str}")
+    knowledge_lines.append(f"- [臨] 修改 {summary['files_modified']} 個檔案")
+    if summary["atoms_referenced"]:
+        knowledge_lines.append(
+            f"- [臨] 引用 atoms: {', '.join(summary['atoms_referenced'])}"
+        )
+    for ki in summary["knowledge_items"]:
+        knowledge_lines.append(f"- [{ki['classification'].strip('[]')}] {ki['content']}")
+
+    content = (
+        f"# Session: {today} {summary['primary_area']}\n"
+        f"\n"
+        f"- Scope: global\n"
+        f"- Confidence: [臨]\n"
+        f"- Type: episodic\n"
+        f"- Trigger: {', '.join(triggers)}\n"
+        f"- Last-used: {today}\n"
+        f"- Created: {today}\n"
+        f"- Confirmations: 0\n"
+        f"- TTL: 24d\n"
+        f"- Expires-at: {expires}\n"
+        f"\n"
+        f"## 知識\n"
+        f"\n"
+        + "\n".join(knowledge_lines)
+        + f"\n"
+        f"\n"
+        f"## 行動\n"
+        f"\n"
+        f"- session 自動摘要，TTL 24d 後自動淘汰\n"
+        f"- 若需長期保留特定知識，應遷移至專屬 atom\n"
+        f"\n"
+        f"## 演化日誌\n"
+        f"\n"
+        f"| 日期 | 變更 | 來源 |\n"
+        f"|------|------|------|\n"
+        f"| {today} | 自動建立 episodic atom | session:{session_id[:8]} |\n"
+    )
+
+    atom_path.write_text(content, encoding="utf-8")
+    _update_memory_index(MEMORY_DIR, atom_name, triggers)
+
+    print(f"[episodic] Generated: {atom_path.name}", file=sys.stderr)
+    return atom_name
+
+
 def handle_session_end(input_data: Dict[str, Any], config: Dict[str, Any]) -> None:
     session_id = input_data.get("session_id", "")
     state = read_state(session_id)
@@ -805,6 +1043,13 @@ def handle_session_end(input_data: Dict[str, Any], config: Dict[str, Any]) -> No
             f"{mod_count} modified files, {kq_count} knowledge items.",
             file=sys.stderr,
         )
+
+    # v2.1 Task #2: Auto-generate episodic atom
+    if config.get("episodic", {}).get("auto_generate", True):
+        try:
+            _generate_episodic_atom(session_id, state, config)
+        except Exception as e:
+            print(f"[episodic] generation failed: {e}", file=sys.stderr)
 
     write_state(session_id, state)
 
