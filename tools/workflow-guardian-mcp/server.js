@@ -10,6 +10,7 @@
 const fs = require("fs");
 const path = require("path");
 const http = require("http");
+const { exec } = require("child_process");
 
 // ─── Crash protection & logging ─────────────────────────────────────────────
 
@@ -36,6 +37,8 @@ process.on("SIGTERM", () => {
 process.on("SIGINT", () => {
   crashLog("SIGINT", "Process received SIGINT");
 });
+const MEMORY_DIR = path.join(CLAUDE_DIR, "memory");
+const TOOLS_DIR = path.join(CLAUDE_DIR, "tools");
 const CONFIG_PATH = path.join(WORKFLOW_DIR, "config.json");
 const DASHBOARD_PORT = loadConfig().dashboard_port || 3848;
 
@@ -209,7 +212,7 @@ function handleMessage(msg) {
       sendResponse(id, {
         protocolVersion: "2025-11-25",
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: "workflow-guardian", version: "1.0.0" },
+        serverInfo: { name: "workflow-guardian", version: "2.1.0" },
       });
       break;
 
@@ -461,6 +464,176 @@ function sendToolResult(id, text, isError = false) {
   });
 }
 
+// ─── v2.1 API Handlers ──────────────────────────────────────────────────────
+
+function jsonRes(res, code, data) {
+  res.writeHead(code, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(data));
+}
+
+// Build a safe python command (Windows path backslashes must be forward-slashed for exec)
+function pyCmd(scriptPath, args) {
+  return 'python "' + scriptPath.replace(/\\/g, "/") + '" ' + args;
+}
+
+// --- Episodic Atom Parser & API ---
+
+function parseEpisodicAtom(filePath) {
+  const content = fs.readFileSync(filePath, "utf-8");
+  const atom = {
+    filename: path.basename(filePath),
+    title: "", confidence: "", type: "", triggers: [],
+    last_used: "", created: "", ttl: "", expires_at: "",
+    days_until_expiry: null, knowledge_lines: [], full_content: content,
+  };
+  const titleMatch = content.match(/^#\s+(.+)$/m);
+  if (titleMatch) atom.title = titleMatch[1];
+  const metaRe = /^-\s+([\w-]+):\s*(.+)$/gm;
+  let m;
+  while ((m = metaRe.exec(content)) !== null) {
+    const key = m[1].toLowerCase(), val = m[2].trim();
+    switch (key) {
+      case "confidence": atom.confidence = val; break;
+      case "type": atom.type = val; break;
+      case "trigger": atom.triggers = val.split(",").map(t => t.trim()); break;
+      case "last-used": atom.last_used = val; break;
+      case "created": atom.created = val; break;
+      case "ttl": atom.ttl = val; break;
+      case "expires-at":
+        atom.expires_at = val;
+        const expDate = new Date(val);
+        atom.days_until_expiry = Math.ceil((expDate - new Date()) / 86400000);
+        break;
+    }
+  }
+  let inKnowledge = false;
+  for (const line of content.split("\n")) {
+    if (/^##\s+知識/.test(line)) { inKnowledge = true; continue; }
+    if (/^##\s+/.test(line) && inKnowledge) break;
+    if (inKnowledge && line.trim().startsWith("-")) {
+      atom.knowledge_lines.push(line.trim().replace(/^-\s*/, ""));
+    }
+  }
+  return atom;
+}
+
+function apiEpisodic(req, res) {
+  try {
+    const files = fs.readdirSync(MEMORY_DIR)
+      .filter(f => f.startsWith("episodic-") && f.endsWith(".md"));
+    const atoms = files.map(f => {
+      try { return parseEpisodicAtom(path.join(MEMORY_DIR, f)); }
+      catch { return null; }
+    }).filter(Boolean);
+    atoms.sort((a, b) => (b.created || "").localeCompare(a.created || ""));
+    jsonRes(res, 200, atoms);
+  } catch { jsonRes(res, 200, []); }
+}
+
+// --- Memory Health API (cached) ---
+
+let healthCache = { data: null, timestamp: 0 };
+const HEALTH_CACHE_TTL_MS = 60000;
+
+function apiHealth(req, res, forceRefresh) {
+  const now = Date.now();
+  if (!forceRefresh && healthCache.data && (now - healthCache.timestamp) < HEALTH_CACHE_TTL_MS) {
+    return jsonRes(res, 200, healthCache.data);
+  }
+  const scriptPath = path.join(TOOLS_DIR, "memory-audit.py");
+  exec(pyCmd(scriptPath, "--json"), { timeout: 30000 }, (err, stdout, stderr) => {
+    // Script may exit non-zero when issues found — still check stdout for valid JSON
+    if (stdout) {
+      try {
+        const data = JSON.parse(stdout);
+        healthCache = { data, timestamp: Date.now() };
+        return jsonRes(res, 200, data);
+      } catch {}
+    }
+    if (err) return jsonRes(res, 500, { error: "audit failed", details: (stderr || err.message).slice(0, 500) });
+    jsonRes(res, 500, { error: "empty audit output" });
+  });
+}
+
+// --- E2E Test Runner (async jobs) ---
+
+const testJobs = new Map();
+
+function apiTestRunStart(req, res) {
+  // Only one running test at a time
+  for (const [, j] of testJobs) {
+    if (j.status === "running") return jsonRes(res, 409, { error: "test already running", job_id: j.id });
+  }
+  const jobId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const job = { id: jobId, status: "running", result: null, startedAt: Date.now(), finishedAt: null };
+  testJobs.set(jobId, job);
+
+  const scriptPath = path.join(TOOLS_DIR, "test-memory-v21.py");
+  exec(pyCmd(scriptPath, "--json"), { timeout: 120000 }, (err, stdout, stderr) => {
+    if (!testJobs.has(jobId)) return;
+    // Script exits non-zero when tests fail — still parse stdout
+    if (stdout) {
+      try { job.result = JSON.parse(stdout); job.status = "completed"; }
+      catch { /* fall through to error handling */ }
+    }
+    if (!job.result) {
+      if (err) { job.status = "error"; job.result = { error: err.message, stderr: (stderr || "").slice(0, 1000) }; }
+      else { job.status = "error"; job.result = { error: "empty output" }; }
+    }
+    job.finishedAt = Date.now();
+    setTimeout(() => testJobs.delete(jobId), 300000);
+  });
+
+  jsonRes(res, 202, { job_id: jobId, status: "running" });
+}
+
+function apiTestRunStatus(req, res, jobId) {
+  const job = testJobs.get(jobId);
+  if (!job) return jsonRes(res, 404, { error: "job not found" });
+  jsonRes(res, 200, {
+    job_id: jobId, status: job.status,
+    elapsed_ms: (job.finishedAt || Date.now()) - job.startedAt,
+    result: job.result,
+  });
+}
+
+// --- Vector Status Proxy ---
+
+function apiVectorStatus(req, res) {
+  const cfg = loadConfig();
+  const port = cfg.vector_search?.service_port || 3849;
+  const proxyReq = http.request(
+    { hostname: "127.0.0.1", port, path: "/status", method: "GET", timeout: 5000 },
+    (proxyRes) => {
+      let body = "";
+      proxyRes.on("data", chunk => body += chunk);
+      proxyRes.on("end", () => {
+        try { jsonRes(res, 200, JSON.parse(body)); }
+        catch { jsonRes(res, 502, { error: "invalid response from vector service" }); }
+      });
+    }
+  );
+  proxyReq.on("error", () => jsonRes(res, 503, { error: "vector service unreachable", port }));
+  proxyReq.on("timeout", () => { proxyReq.destroy(); jsonRes(res, 504, { error: "vector service timeout" }); });
+  proxyReq.end();
+}
+
+// --- Knowledge Queue Aggregation ---
+
+function apiKnowledgeQueue(req, res) {
+  const sessions = listAllSessions();
+  const items = [];
+  for (const s of sessions) {
+    if (s.ended) continue;
+    const state = readState(s.session_id);
+    if (!state) continue;
+    for (const kq of (state.knowledge_queue || [])) {
+      items.push({ session_id: s.session_id, session_name: s.name, ...kq });
+    }
+  }
+  jsonRes(res, 200, items);
+}
+
 // ─── HTTP Dashboard ─────────────────────────────────────────────────────────
 
 const DASHBOARD_HTML = `<!DOCTYPE html>
@@ -468,16 +641,22 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Workflow Guardian Dashboard</title>
+<title>Workflow Guardian v2.1</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, "Segoe UI", sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; }
   h1 { color: #58a6ff; margin-bottom: 4px; font-size: 1.4em; }
-  .subtitle { color: #8b949e; font-size: 0.85em; margin-bottom: 20px; }
-  .stats { display: flex; gap: 16px; margin-bottom: 20px; }
-  .stat { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px 16px; }
-  .stat-value { font-size: 1.6em; font-weight: bold; color: #58a6ff; }
-  .stat-label { font-size: 0.8em; color: #8b949e; }
+  .subtitle { color: #8b949e; font-size: 0.85em; margin-bottom: 12px; }
+  .stats { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  .stat { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 10px 14px; min-width: 100px; }
+  .stat-value { font-size: 1.4em; font-weight: bold; color: #58a6ff; }
+  .stat-label { font-size: 0.75em; color: #8b949e; }
+  .tab-nav { display: flex; gap: 0; border-bottom: 1px solid #30363d; margin-bottom: 16px; }
+  .tab-btn { padding: 8px 16px; border: none; background: none; color: #8b949e; cursor: pointer; border-bottom: 2px solid transparent; font-size: 0.9em; font-family: inherit; }
+  .tab-btn:hover { color: #c9d1d9; }
+  .tab-btn.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
   .sessions { display: flex; flex-direction: column; gap: 12px; }
   .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
   .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
@@ -501,133 +680,503 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   .kq-badge-observe { color: #d2a826; }
   .kq-badge-temp { color: #f0883e; }
   .actions { margin-top: 10px; display: flex; gap: 8px; }
-  .btn { padding: 4px 12px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #c9d1d9; cursor: pointer; font-size: 0.8em; }
+  .btn { padding: 4px 12px; border-radius: 4px; border: 1px solid #30363d; background: #21262d; color: #c9d1d9; cursor: pointer; font-size: 0.8em; font-family: inherit; }
   .btn:hover { background: #30363d; }
+  .btn-primary { border-color: #388bfd66; color: #58a6ff; }
+  .btn-primary:hover { background: #388bfd22; }
+  .btn-success { border-color: #3fb95066; color: #3fb950; }
+  .btn-success:hover { background: #3fb95022; }
   .btn-danger { border-color: #f8514966; color: #f85149; }
   .btn-danger:hover { background: #f8514922; }
   .empty { text-align: center; color: #8b949e; padding: 40px; }
-  .auto-refresh { float: right; font-size: 0.8em; color: #8b949e; }
+  .auto-refresh { font-size: 0.8em; color: #8b949e; }
   .auto-refresh label { cursor: pointer; }
+  /* Timeline */
+  .timeline { position: relative; padding-left: 28px; border-left: 2px solid #30363d; margin-left: 8px; }
+  .timeline-item { position: relative; margin-bottom: 16px; }
+  .timeline-dot { position: absolute; left: -35px; top: 10px; width: 12px; height: 12px; border-radius: 50%; border: 2px solid #0d1117; }
+  .ttl-green { background: #3fb950; }
+  .ttl-yellow { background: #d2a826; }
+  .ttl-red { background: #f85149; }
+  .ttl-critical { background: #f85149; animation: pulse 1s infinite; }
+  .ttl-expired { background: #484f58; }
+  @keyframes pulse { 50% { opacity: 0.4; } }
+  .timeline-card { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px; }
+  .timeline-date { font-size: 0.75em; color: #8b949e; }
+  .timeline-title { font-weight: 600; color: #e6edf3; margin: 4px 0; }
+  .timeline-ttl { font-size: 0.8em; padding: 1px 6px; border-radius: 8px; font-weight: 600; }
+  .timeline-knowledge { margin-top: 8px; font-size: 0.82em; color: #8b949e; }
+  .timeline-knowledge li { padding: 2px 0; list-style: none; }
+  .timeline-full { margin-top: 8px; padding-top: 8px; border-top: 1px solid #30363d; white-space: pre-wrap; font-family: monospace; font-size: 0.78em; color: #8b949e; max-height: 300px; overflow-y: auto; }
+  /* Health */
+  .health-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; margin-bottom: 16px; }
+  .health-stat { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px; text-align: center; }
+  .health-stat .val { font-size: 1.5em; font-weight: bold; }
+  .health-stat .lbl { font-size: 0.75em; color: #8b949e; }
+  .issue-table { width: 100%; border-collapse: collapse; font-size: 0.82em; margin-bottom: 16px; }
+  .issue-table th { text-align: left; color: #8b949e; padding: 6px 8px; border-bottom: 1px solid #30363d; }
+  .issue-table td { padding: 6px 8px; border-bottom: 1px solid #21262d; }
+  .level-error { color: #f85149; }
+  .level-warning { color: #d2a826; }
+  .level-info { color: #58a6ff; }
+  .suggest-list { list-style: none; margin-bottom: 16px; }
+  .suggest-list li { padding: 6px 0; border-bottom: 1px solid #21262d; font-size: 0.85em; }
+  .suggest-arrow { color: #58a6ff; font-weight: bold; }
+  .cache-info { font-size: 0.75em; color: #484f58; margin-top: 8px; }
+  /* Tests */
+  .test-card { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 6px; margin-bottom: 6px; background: #161b22; border: 1px solid #30363d; }
+  .test-pass { border-left: 3px solid #3fb950; }
+  .test-fail { border-left: 3px solid #f85149; }
+  .test-skip { border-left: 3px solid #8b949e; }
+  .test-icon { font-size: 1.1em; width: 22px; text-align: center; }
+  .test-name { font-weight: 600; color: #e6edf3; flex: 1; }
+  .test-duration { font-size: 0.8em; color: #8b949e; }
+  .test-msg { font-size: 0.78em; color: #8b949e; font-family: monospace; }
+  .test-summary { display: flex; gap: 16px; padding: 12px; background: #161b22; border: 1px solid #30363d; border-radius: 6px; margin-bottom: 12px; font-size: 0.9em; }
+  .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #30363d; border-top-color: #58a6ff; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 8px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .run-btn { padding: 10px 24px; font-size: 1em; border-radius: 6px; border: 1px solid #3fb95066; background: #23863622; color: #3fb950; cursor: pointer; font-weight: 600; font-family: inherit; }
+  .run-btn:hover { background: #23863644; }
+  .run-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  /* Vector */
+  .vec-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .vec-section { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 14px; }
+  .vec-section h3 { font-size: 0.9em; color: #58a6ff; margin-bottom: 8px; }
+  .vec-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 0.85em; }
+  .vec-row .k { color: #8b949e; }
+  .vec-row .v { color: #e6edf3; font-family: monospace; }
+  .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .status-online { background: #3fb950; }
+  .status-offline { background: #f85149; }
+  .section-title { font-size: 1em; font-weight: 600; color: #e6edf3; margin-bottom: 10px; }
 </style>
 </head>
 <body>
 <div style="display:flex;justify-content:space-between;align-items:baseline;">
-  <div><h1>Workflow Guardian</h1><p class="subtitle">Session workflow monitor</p></div>
+  <div><h1>Workflow Guardian v2.1</h1><p class="subtitle">Memory & Session Monitor</p></div>
   <div class="auto-refresh"><label><input type="checkbox" id="autoRefresh" checked> Auto-refresh (5s)</label></div>
 </div>
 
 <div class="stats" id="statsBar"></div>
-<div class="sessions" id="sessionList"></div>
+
+<nav class="tab-nav">
+  <button class="tab-btn active" data-tab="sessions">Sessions</button>
+  <button class="tab-btn" data-tab="episodic">Episodic</button>
+  <button class="tab-btn" data-tab="health">Health</button>
+  <button class="tab-btn" data-tab="tests">Tests</button>
+  <button class="tab-btn" data-tab="vector">Vector</button>
+</nav>
+
+<div id="panelSessions" class="tab-panel active">
+  <div class="sessions" id="sessionList"></div>
+</div>
+
+<div id="panelEpisodic" class="tab-panel">
+  <div id="episodicContent"></div>
+</div>
+
+<div id="panelHealth" class="tab-panel">
+  <div id="healthContent"><div class="empty">Loading health data...</div></div>
+</div>
+
+<div id="panelTests" class="tab-panel">
+  <div id="testsContent">
+    <div style="text-align:center;padding:20px;">
+      <button class="run-btn" id="runTestsBtn" onclick="startTestRun()">Run E2E Tests</button>
+    </div>
+    <div id="testResults"></div>
+  </div>
+</div>
+
+<div id="panelVector" class="tab-panel">
+  <div id="vectorContent"><div class="empty">Loading vector status...</div></div>
+</div>
 
 <script>
 let refreshTimer;
+let currentTab = "sessions";
+let testJobId = null;
+let testPollTimer = null;
+
+// ─── Tab Switching ───
+
+document.querySelectorAll(".tab-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    currentTab = btn.dataset.tab;
+    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
+    document.getElementById("panel" + currentTab.charAt(0).toUpperCase() + currentTab.slice(1)).classList.add("active");
+    refreshCurrentTab();
+  });
+});
+
+function refreshCurrentTab() {
+  switch (currentTab) {
+    case "sessions": renderSessions(); break;
+    case "episodic": renderEpisodic(); break;
+    case "health": renderHealth(false); break;
+    case "tests": break; // manual trigger only
+    case "vector": renderVector(); break;
+  }
+}
+
+// ─── Sessions Panel (existing logic) ───
 
 async function fetchSessions() {
-  try {
-    const res = await fetch("/api/sessions");
-    return await res.json();
-  } catch { return []; }
+  try { const r = await fetch("/api/sessions"); return await r.json(); }
+  catch { return []; }
 }
 
 async function sendSignal(sid, signal) {
   await fetch("/api/sessions/" + sid + "/signal", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
+    method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ signal })
   });
-  render();
+  renderSessions();
 }
 
 async function deleteSession(sid) {
-  if (!confirm("Delete state for session " + sid.slice(0,8) + "?")) return;
+  if (!confirm("Delete session " + sid.slice(0,8) + "?")) return;
   await fetch("/api/sessions/" + sid, { method: "DELETE" });
-  render();
+  renderSessions();
 }
 
-function badgeClass(phase) {
-  return "badge badge-" + (phase || "init");
-}
+function badgeClass(phase) { return "badge badge-" + (phase || "init"); }
 
-function classificationBadge(c) {
+function clsBadge(c) {
   if (c === "[固]") return '<span class="kq-badge kq-badge-fixed">[固]</span>';
   if (c === "[觀]") return '<span class="kq-badge kq-badge-observe">[觀]</span>';
   return '<span class="kq-badge kq-badge-temp">[臨]</span>';
 }
 
-async function render() {
+function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+
+async function renderSessions() {
   const sessions = await fetchSessions();
   const active = sessions.filter(s => !s.ended);
   const pending = sessions.filter(s => s.sync_pending && !s.ended);
-
-  document.getElementById("statsBar").innerHTML =
-    '<div class="stat"><div class="stat-value">' + sessions.length + '</div><div class="stat-label">Total Sessions</div></div>' +
-    '<div class="stat"><div class="stat-value">' + active.length + '</div><div class="stat-label">Active</div></div>' +
-    '<div class="stat"><div class="stat-value">' + pending.length + '</div><div class="stat-label">Pending Sync</div></div>';
+  updateStats(sessions.length, active.length, pending.length);
 
   if (sessions.length === 0) {
     document.getElementById("sessionList").innerHTML = '<div class="empty">No workflow sessions found.</div>';
     return;
   }
 
-  // Fetch full state for each
   const cards = await Promise.all(sessions.map(async (s) => {
     let detail;
-    try {
-      const res = await fetch("/api/sessions/" + s.session_id);
-      detail = await res.json();
-    } catch { detail = {}; }
-
-    const files = (detail.modified_files || []);
-    const kq = (detail.knowledge_queue || []);
+    try { const r = await fetch("/api/sessions/" + s.session_id); detail = await r.json(); }
+    catch { detail = {}; }
+    const files = detail.modified_files || [];
+    const kq = detail.knowledge_queue || [];
     const uniqueFiles = [...new Set(files.map(f => f.path))];
-
     let fileHtml = "";
     if (uniqueFiles.length > 0) {
       fileHtml = '<details><summary>Modified files (' + uniqueFiles.length + ')</summary><ul class="file-list">' +
-        uniqueFiles.map(f => { const name = f.replace(/\\\\/g,"/").split("/").pop(); return "<li>" + name + " <span style='color:#484f58'>" + f + "</span></li>"; }).join("") +
-        "</ul></details>";
+        uniqueFiles.map(f => "<li>" + esc(f.split(/[\\\\/]/).pop()) + ' <span style="color:#484f58">' + esc(f) + "</span></li>").join("") + "</ul></details>";
     }
-
     let kqHtml = "";
     if (kq.length > 0) {
       kqHtml = '<details><summary>Knowledge queue (' + kq.length + ')</summary><ul class="kq-list">' +
-        kq.map(q => "<li>" + classificationBadge(q.classification) + " " + (q.content || "").slice(0,80) + "</li>").join("") +
-        "</ul></details>";
+        kq.map(q => "<li>" + clsBadge(q.classification) + " " + esc((q.content||"").slice(0,80)) + "</li>").join("") + "</ul></details>";
     }
-
     return '<div class="card">' +
-      '<div class="card-header">' +
-        '<span class="card-name">' + (s.name || "?") + '</span>' +
-        '<span class="' + badgeClass(s.phase) + '">' + s.phase + (s.muted ? ' (muted)' : '') + '</span>' +
-      '</div>' +
-      '<div class="card-meta"><span class="card-id">' + s.session_id.slice(0,8) + '</span> &middot; ' + (s.project || "?") + ' &middot; ' + s.age_minutes + ' min' + (s.ended ? ' &middot; ended' : '') + '</div>' +
-      '<div class="card-stats">' +
-        '<span>Files: <strong>' + s.modified_files_count + '</strong></span>' +
-        '<span>Knowledge: <strong>' + s.knowledge_queue_count + '</strong></span>' +
-        '<span>Sync: <strong>' + (s.sync_pending ? "pending" : "ok") + '</strong></span>' +
-      '</div>' +
-      (fileHtml || kqHtml ? '<div class="details">' + fileHtml + kqHtml + '</div>' : '') +
+      '<div class="card-header"><span class="card-name">' + esc(s.name||"?") + '</span><span class="' + badgeClass(s.phase) + '">' + s.phase + (s.muted?" (muted)":"") + '</span></div>' +
+      '<div class="card-meta"><span class="card-id">' + s.session_id.slice(0,8) + '</span> &middot; ' + esc(s.project||"?") + ' &middot; ' + s.age_minutes + ' min' + (s.ended?" &middot; ended":"") + '</div>' +
+      '<div class="card-stats"><span>Files: <strong>' + s.modified_files_count + '</strong></span><span>Knowledge: <strong>' + s.knowledge_queue_count + '</strong></span><span>Sync: <strong>' + (s.sync_pending?"pending":"ok") + '</strong></span></div>' +
+      (fileHtml||kqHtml ? '<div class="details">' + fileHtml + kqHtml + '</div>' : '') +
       '<div class="actions">' +
-        '<button class="btn" onclick="sendSignal(\\''+s.session_id+'\\',\\'sync_completed\\')">Mark Synced</button>' +
-        '<button class="btn" onclick="sendSignal(\\''+s.session_id+'\\',\\'reset\\')">Reset</button>' +
-        (s.muted ? '' : '<button class="btn" onclick="sendSignal(\\''+s.session_id+'\\',\\'mute\\')">Mute</button>') +
-        '<button class="btn btn-danger" onclick="deleteSession(\\''+s.session_id+'\\')">Delete</button>' +
-      '</div>' +
-    '</div>';
+        '<button class="btn" onclick="sendSignal(\\'' + s.session_id + '\\',\\'sync_completed\\')">Mark Synced</button>' +
+        '<button class="btn" onclick="sendSignal(\\'' + s.session_id + '\\',\\'reset\\')">Reset</button>' +
+        (s.muted ? '' : '<button class="btn" onclick="sendSignal(\\'' + s.session_id + '\\',\\'mute\\')">Mute</button>') +
+        '<button class="btn btn-danger" onclick="deleteSession(\\'' + s.session_id + '\\')">Delete</button>' +
+      '</div></div>';
   }));
-
   document.getElementById("sessionList").innerHTML = cards.join("");
 }
+
+// ─── Stats Bar ───
+
+function updateStats(total, active, pending, extra) {
+  let html = '<div class="stat"><div class="stat-value">' + total + '</div><div class="stat-label">Sessions</div></div>' +
+    '<div class="stat"><div class="stat-value">' + active + '</div><div class="stat-label">Active</div></div>' +
+    '<div class="stat"><div class="stat-value">' + pending + '</div><div class="stat-label">Pending Sync</div></div>';
+  if (extra) html += extra;
+  document.getElementById("statsBar").innerHTML = html;
+}
+
+// ─── Episodic Timeline ───
+
+async function renderEpisodic() {
+  const el = document.getElementById("episodicContent");
+  try {
+    const atoms = await (await fetch("/api/episodic")).json();
+    if (!atoms.length) {
+      el.innerHTML = '<div class="empty">No episodic atoms found.<br><span style="font-size:0.85em">They are auto-generated when sessions end.</span></div>';
+      return;
+    }
+    let html = '<div class="timeline">';
+    for (const a of atoms) {
+      const d = a.days_until_expiry;
+      let dotCls = "ttl-green";
+      let ttlLabel = d + "d left";
+      let ttlStyle = "background:#3fb95022;color:#3fb950";
+      if (d !== null && d <= 0) { dotCls = "ttl-expired"; ttlLabel = "expired"; ttlStyle = "background:#484f5822;color:#484f58"; }
+      else if (d !== null && d <= 3) { dotCls = "ttl-critical"; ttlLabel = d + "d left"; ttlStyle = "background:#f8514922;color:#f85149"; }
+      else if (d !== null && d <= 7) { dotCls = "ttl-red"; ttlStyle = "background:#f8514922;color:#f85149"; }
+      else if (d !== null && d <= 14) { dotCls = "ttl-yellow"; ttlStyle = "background:#d2a82622;color:#d2a826"; }
+
+      const knLines = (a.knowledge_lines || []).slice(0, 5).map(l => "<li>" + esc(l) + "</li>").join("");
+      const hasMore = (a.knowledge_lines||[]).length > 5;
+
+      html += '<div class="timeline-item"><div class="timeline-dot ' + dotCls + '"></div><div class="timeline-card">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center">' +
+          '<span class="timeline-date">' + esc(a.created || "?") + '</span>' +
+          '<span class="timeline-ttl" style="' + ttlStyle + '">' + ttlLabel + '</span>' +
+        '</div>' +
+        '<div class="timeline-title">' + esc(a.title) + '</div>' +
+        '<div style="font-size:0.78em;color:#8b949e">' + esc(a.triggers.join(", ")) + '</div>' +
+        (knLines ? '<ul class="timeline-knowledge">' + knLines + (hasMore ? '<li style="color:#58a6ff">... +' + ((a.knowledge_lines||[]).length - 5) + ' more</li>' : '') + '</ul>' : '') +
+        '<details><summary style="font-size:0.8em;color:#58a6ff;cursor:pointer;margin-top:6px">Full content</summary>' +
+          '<div class="timeline-full">' + esc(a.full_content) + '</div></details>' +
+      '</div></div>';
+    }
+    html += '</div>';
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = '<div class="empty">Failed to load episodic data: ' + esc(e.message) + '</div>';
+  }
+}
+
+// ─── Memory Health ───
+
+let lastHealthData = null;
+
+async function renderHealth(force) {
+  const el = document.getElementById("healthContent");
+  try {
+    const url = "/api/health" + (force ? "?force=1" : "");
+    el.innerHTML = '<div class="empty"><span class="spinner"></span> Loading health report...</div>';
+    const data = await (await fetch(url)).json();
+    if (data.error) { el.innerHTML = '<div class="empty">Health check failed: ' + esc(data.error) + '</div>'; return; }
+    lastHealthData = data;
+
+    const cc = data.confidence_counts || {};
+    let html = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">' +
+      '<span class="section-title">Memory Health Report</span>' +
+      '<button class="btn btn-primary" onclick="renderHealth(true)">Refresh Now</button></div>';
+
+    // Confidence counts
+    html += '<div class="health-grid">';
+    html += '<div class="health-stat"><div class="val" style="color:#3fb950">' + (cc["[固]"]||0) + '</div><div class="lbl">[固] Fixed</div></div>';
+    html += '<div class="health-stat"><div class="val" style="color:#d2a826">' + (cc["[觀]"]||0) + '</div><div class="lbl">[觀] Observe</div></div>';
+    html += '<div class="health-stat"><div class="val" style="color:#f0883e">' + (cc["[臨]"]||0) + '</div><div class="lbl">[臨] Temp</div></div>';
+    html += '<div class="health-stat"><div class="val">' + (data.total_atoms||0) + '</div><div class="lbl">Total Atoms</div></div>';
+    html += '<div class="health-stat"><div class="val">' + (data.distant_count||0) + '</div><div class="lbl">Distant</div></div>';
+    html += '</div>';
+
+    // Issues
+    const issues = data.issues || [];
+    if (issues.length) {
+      html += '<div class="section-title">Issues (' + issues.length + ')</div>';
+      html += '<table class="issue-table"><tr><th>Level</th><th>Category</th><th>File</th><th>Message</th></tr>';
+      for (const i of issues) {
+        html += '<tr><td class="level-' + i.level + '">' + i.level + '</td><td>' + esc(i.category) + '</td><td style="font-family:monospace;font-size:0.85em">' + esc(i.file) + '</td><td>' + esc(i.message) + '</td></tr>';
+      }
+      html += '</table>';
+    }
+
+    // Promotions
+    const promos = data.promotions || [];
+    if (promos.length) {
+      html += '<div class="section-title">Promotion Candidates</div><ul class="suggest-list">';
+      for (const p of promos) {
+        html += '<li><span style="font-family:monospace">' + esc(p.file) + '</span> ' + p.current + ' <span class="suggest-arrow">&rarr;</span> ' + p.suggested + '<br><span style="color:#8b949e;font-size:0.82em">' + esc(p.reason) + '</span></li>';
+      }
+      html += '</ul>';
+    }
+
+    // Demotions
+    const demos = data.demotions || [];
+    if (demos.length) {
+      html += '<div class="section-title">Demotion / Stale Warnings</div><ul class="suggest-list">';
+      for (const d of demos) {
+        html += '<li><span style="font-family:monospace">' + esc(d.file) + '</span> ' + d.current + ' <span class="suggest-arrow">&rarr;</span> ' + d.suggested + '<br><span style="color:#8b949e;font-size:0.82em">' + esc(d.reason) + '</span></li>';
+      }
+      html += '</ul>';
+    }
+
+    // Audit stats
+    const as = data.audit_stats || {};
+    if (as.total_entries) {
+      html += '<div class="section-title">Audit Trail Summary</div><div class="health-grid">';
+      const ba = as.by_action || {};
+      for (const [k, v] of Object.entries(ba)) {
+        html += '<div class="health-stat"><div class="val">' + v + '</div><div class="lbl">' + k + '</div></div>';
+      }
+      html += '<div class="health-stat"><div class="val">' + as.total_entries + '</div><div class="lbl">Total Entries</div></div>';
+      html += '</div>';
+    }
+
+    html += '<div class="cache-info">Scanned: ' + esc(data.scan_date || "?") + ' | Layers: ' + (data.layers||[]).join(", ") + '</div>';
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = '<div class="empty">Failed to load health data: ' + esc(e.message) + '</div>';
+  }
+}
+
+// ─── E2E Test Runner ───
+
+async function startTestRun() {
+  const btn = document.getElementById("runTestsBtn");
+  const el = document.getElementById("testResults");
+  btn.disabled = true;
+  el.innerHTML = '<div style="text-align:center;padding:16px"><span class="spinner"></span> Running tests... <span id="testElapsed">0s</span></div>';
+  const startTime = Date.now();
+  const elapsedTimer = setInterval(() => {
+    const s = ((Date.now() - startTime) / 1000).toFixed(0);
+    const te = document.getElementById("testElapsed");
+    if (te) te.textContent = s + "s";
+  }, 500);
+
+  try {
+    const r = await fetch("/api/test-run", { method: "POST" });
+    const d = await r.json();
+    if (d.error) { el.innerHTML = '<div class="empty">' + esc(d.error) + '</div>'; btn.disabled = false; clearInterval(elapsedTimer); return; }
+    testJobId = d.job_id;
+    testPollTimer = setInterval(async () => {
+      try {
+        const sr = await fetch("/api/test-run/" + testJobId);
+        const sd = await sr.json();
+        if (sd.status !== "running") {
+          clearInterval(testPollTimer);
+          clearInterval(elapsedTimer);
+          testPollTimer = null;
+          btn.disabled = false;
+          renderTestResults(sd);
+        }
+      } catch {}
+    }, 2000);
+  } catch (e) {
+    el.innerHTML = '<div class="empty">Failed: ' + esc(e.message) + '</div>';
+    btn.disabled = false;
+    clearInterval(elapsedTimer);
+  }
+}
+
+function renderTestResults(job) {
+  const el = document.getElementById("testResults");
+  if (job.status === "error") {
+    const err = job.result || {};
+    el.innerHTML = '<div class="empty" style="color:#f85149">Test run failed: ' + esc(err.error || "unknown") + (err.stderr ? '<br><pre style="text-align:left;font-size:0.8em;margin-top:8px">' + esc(err.stderr) + '</pre>' : '') + '</div>';
+    return;
+  }
+  const r = job.result || {};
+  const results = r.results || [];
+  let html = '<div class="test-summary">' +
+    '<span style="color:#3fb950;font-weight:600">Passed: ' + (r.passed||0) + '</span>' +
+    '<span style="color:#f85149;font-weight:600">Failed: ' + (r.failed||0) + '</span>' +
+    '<span style="color:#8b949e">Skipped: ' + (r.skipped||0) + '</span>' +
+    '<span style="color:#8b949e">Total: ' + (r.total||0) + '</span>' +
+    '<span style="color:#8b949e">Duration: ' + ((job.elapsed_ms||0)/1000).toFixed(1) + 's</span>' +
+  '</div>';
+  for (const t of results) {
+    const cls = t.skipped ? "test-skip" : (t.passed ? "test-pass" : "test-fail");
+    const icon = t.skipped ? "&#9711;" : (t.passed ? "&#10003;" : "&#10007;");
+    const iconColor = t.skipped ? "#8b949e" : (t.passed ? "#3fb950" : "#f85149");
+    html += '<div class="test-card ' + cls + '">' +
+      '<span class="test-icon" style="color:' + iconColor + '">' + icon + '</span>' +
+      '<span class="test-name">' + esc(t.name) + '</span>' +
+      '<span class="test-duration">' + (t.duration_ms||0).toFixed(0) + 'ms</span>' +
+    '</div>';
+    if (t.message) {
+      html += '<div style="padding:0 14px 6px 48px"><span class="test-msg">' + esc(t.message) + '</span></div>';
+    }
+  }
+  el.innerHTML = html;
+}
+
+// ─── Vector Status ───
+
+async function renderVector() {
+  const el = document.getElementById("vectorContent");
+  try {
+    const r = await fetch("/api/vector-status");
+    const d = await r.json();
+    if (d.error) {
+      el.innerHTML = '<div class="card" style="text-align:center;padding:24px"><span class="status-dot status-offline"></span><strong style="color:#f85149">Offline</strong><br><span style="color:#8b949e;font-size:0.85em">' + esc(d.error) + '</span></div>';
+      return;
+    }
+    const svc = d.service || {};
+    const idx = d.index || {};
+    const cfg = d.config || {};
+    const job = d.index_job || {};
+    const upH = Math.floor((svc.uptime_seconds||0)/3600);
+    const upM = Math.floor(((svc.uptime_seconds||0)%3600)/60);
+
+    let html = '<div style="margin-bottom:12px"><span class="status-dot status-online"></span><strong style="color:#3fb950">Online</strong> <span style="color:#8b949e;font-size:0.85em">(' + esc(svc.embedder||"?") + ' on port ' + (svc.port||3849) + ')</span></div>';
+    html += '<div class="vec-grid">';
+
+    // Service info
+    html += '<div class="vec-section"><h3>Service</h3>';
+    html += '<div class="vec-row"><span class="k">Uptime</span><span class="v">' + upH + 'h ' + upM + 'm</span></div>';
+    html += '<div class="vec-row"><span class="k">Requests</span><span class="v">' + (svc.requests_served||0) + '</span></div>';
+    html += '<div class="vec-row"><span class="k">Embedder</span><span class="v">' + esc(svc.embedder||"?") + '</span></div>';
+    html += '</div>';
+
+    // Index info
+    html += '<div class="vec-section"><h3>Index</h3>';
+    html += '<div class="vec-row"><span class="k">Total Chunks</span><span class="v">' + (idx.total_chunks||0) + '</span></div>';
+    html += '<div class="vec-row"><span class="k">Unique Atoms</span><span class="v">' + (idx.unique_atoms||0) + '</span></div>';
+    html += '<div class="vec-row"><span class="k">Layers</span><span class="v">' + (idx.layers||[]).length + '</span></div>';
+    html += '</div>';
+
+    // Config
+    html += '<div class="vec-section"><h3>Config</h3>';
+    html += '<div class="vec-row"><span class="k">Backend</span><span class="v">' + esc(cfg.embedding_backend||"?") + '</span></div>';
+    html += '<div class="vec-row"><span class="k">Model</span><span class="v">' + esc(cfg.embedding_model||"?") + '</span></div>';
+    html += '<div class="vec-row"><span class="k">Top-K</span><span class="v">' + (cfg.search_top_k||5) + '</span></div>';
+    html += '<div class="vec-row"><span class="k">Min Score</span><span class="v">' + (cfg.search_min_score||0.5) + '</span></div>';
+    html += '</div>';
+
+    // Index job
+    html += '<div class="vec-section"><h3>Last Index Job</h3>';
+    if (job.running) {
+      html += '<div style="color:#d2a826"><span class="spinner"></span> Indexing in progress...</div>';
+    } else if (job.result) {
+      const jr = job.result;
+      html += '<div class="vec-row"><span class="k">Atoms Found</span><span class="v">' + (jr.atoms_found||0) + '</span></div>';
+      html += '<div class="vec-row"><span class="k">Atoms Indexed</span><span class="v">' + (jr.atoms_indexed||0) + '</span></div>';
+      html += '<div class="vec-row"><span class="k">Chunks</span><span class="v">' + (jr.total_chunks||0) + '</span></div>';
+      html += '<div class="vec-row"><span class="k">Duration</span><span class="v">' + ((jr.elapsed_seconds||0)).toFixed(1) + 's</span></div>';
+      html += '<div class="vec-row"><span class="k">Type</span><span class="v">' + (jr.incremental?"Incremental":"Full") + '</span></div>';
+      if (job.finished_at) {
+        const fin = new Date(job.finished_at * 1000);
+        html += '<div class="vec-row"><span class="k">Finished</span><span class="v">' + fin.toLocaleString() + '</span></div>';
+      }
+    } else {
+      html += '<div style="color:#8b949e">No recent index job</div>';
+    }
+    html += '</div>';
+
+    html += '</div>';
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = '<div class="empty">Failed to load vector status: ' + esc(e.message) + '</div>';
+  }
+}
+
+// ─── Auto Refresh ───
 
 function startAutoRefresh() {
   clearInterval(refreshTimer);
   if (document.getElementById("autoRefresh").checked) {
-    refreshTimer = setInterval(render, 5000);
+    refreshTimer = setInterval(refreshCurrentTab, 5000);
   }
 }
 
 document.getElementById("autoRefresh").addEventListener("change", startAutoRefresh);
-render();
+renderSessions();
 startAutoRefresh();
 </script>
 </body>
@@ -723,6 +1272,28 @@ const httpServer = http.createServer((req, res) => {
       }
     });
     return;
+  }
+
+  // v2.1 API routes
+  if (pathname === "/api/episodic" && req.method === "GET") {
+    return apiEpisodic(req, res);
+  }
+  if (pathname === "/api/health" && req.method === "GET") {
+    const force = url.searchParams.get("force") === "1";
+    return apiHealth(req, res, force);
+  }
+  if (pathname === "/api/test-run" && req.method === "POST") {
+    return apiTestRunStart(req, res);
+  }
+  const testJobMatch = pathname.match(/^\/api\/test-run\/([^/]+)$/);
+  if (testJobMatch && req.method === "GET") {
+    return apiTestRunStatus(req, res, testJobMatch[1]);
+  }
+  if (pathname === "/api/vector-status" && req.method === "GET") {
+    return apiVectorStatus(req, res);
+  }
+  if (pathname === "/api/knowledge-queue" && req.method === "GET") {
+    return apiKnowledgeQueue(req, res);
   }
 
   res.writeHead(404);
