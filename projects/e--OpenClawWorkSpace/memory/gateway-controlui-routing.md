@@ -1,9 +1,15 @@
-# Gateway controlUi 路由研究 (2026-03-04)
+# Atom: Gateway controlUi 路由研究
 
-> Scope: OpenClaw Gateway Dashboard + LINE webhook 路由衝突
-> Source: OpenClaw 2026.3.1 source code + GitHub issues + docs
+- Scope: global
+- Confidence: [固]
+- Source: 2026-03-04 holylight — OpenClaw 2026.3.1 source code + GitHub issues + docs
+- Last-used: 2026-03-04
+- Trigger: controlUi 路由衝突、Dashboard Not Found、405、SPA catch-all、basePath、升級 2026.3.2、LINE webhook 404、controlUi basePath
+- Privacy: public
 
-## 核心問題：controlUi SPA 攔截 LINE webhook
+## 知識
+
+### 核心問題：controlUi SPA 攔截 LINE webhook
 
 ### HTTP Request 路由鏈（port 18789）
 
@@ -39,13 +45,21 @@ controlUi handler (`handleControlUiHttpRequest`, line 16915) 只排除：
 - POST 請求不再被 SPA catch-all 攔截
 - npm: `openclaw@2026.3.2`（目前已發布穩定版）
 
+## 2026.3.2 仍需 basePath（2026-03-04 實測）
+
+即使升級到 2026.3.2，預設 `basePath: "/"` 仍會導致：
+- `/health` GET 回 HTML（SPA catch-all）而非 JSON
+- LINE webhook route 在 health-monitor stale-socket 重啟後 404（route 丟失）
+- 設 `basePath: "/ui"` 後一切正常：`/health` 回 JSON、`/line/webhook` 正確 401（簽名驗證）
+
+**結論**：`basePath: "/ui"` 不只是 2026.3.1 workaround，在 2026.3.2 也是必要設定。
+
 ## 解法選項
 
 | 方案 | 做法 | 優缺 |
 |------|------|------|
-| **升級 2026.3.2** | `npm i -g openclaw@2026.3.2` | 最佳解，根本修復路由順序 |
-| **設 basePath** | `controlUi.basePath: "/ui"` | 2026.3.1 可用的 workaround，Dashboard 改從 `/ui` 存取 |
-| **關閉 controlUi** | `controlUi.enabled: false` | 犧牲 Dashboard（目前的狀態） |
+| **設 basePath（採用）** | `controlUi.basePath: "/ui"` | **必要**。即使 2026.3.2 也需要，Dashboard 從 `/ui` 存取 |
+| **關閉 controlUi** | `controlUi.enabled: false` | 犧牲 Dashboard |
 
 ## controlUi 完整設定 schema
 
@@ -79,5 +93,9 @@ controlUi handler (`handleControlUiHttpRequest`, line 16915) 只排除：
 - [Configuration Reference](https://docs.openclaw.ai/gateway/configuration-reference)
 - [Troubleshooting](https://docs.openclaw.ai/gateway/troubleshooting)
 - [GitHub #31448: controlUi route priority bug](https://github.com/openclaw/openclaw/issues/31448)
+- [GitHub #32435: controlUi breaks webhook POST routing](https://github.com/openclaw/openclaw/issues/32435)
+- [GitHub #32584: LINE webhook returns 404](https://github.com/openclaw/openclaw/issues/32584)
+- [GitHub #26478: LINE provider auto-restart loop](https://github.com/openclaw/openclaw/issues/26478)
+- [GitHub #28622: Health monitor stale channel polling](https://github.com/openclaw/openclaw/issues/28622)
 - [Webhook 405 Fix Blog](https://openclaw-setup.me/blog/usage-tips/openclaw-webhook-405-method-not-allowed-fix/)
 - Source: `dist/gateway-cli-tzSO700C.js` lines 16915 (controlUi handler), 19045 (routing chain)

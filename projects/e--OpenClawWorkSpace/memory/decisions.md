@@ -3,8 +3,8 @@
 - Scope: global
 - Confidence: [固]
 - Source: 2026-02-26 holylight — OpenClaw 初始安裝至 Bridge 整合全過程
-- Last-used: 2026-02-28
-- Trigger: 修改 OpenClaw 配置、安裝升級、安全策略討論、平台整合問題
+- Last-used: 2026-03-04
+- Trigger: 修改 OpenClaw 配置、安裝升級、安全策略討論、平台整合問題、ngrok 啟動、Discord 設定、LINE 設定、sandbox、Gateway auth
 - Privacy: public
 
 ## 知識
@@ -27,7 +27,13 @@
 - `npm install -g openclaw@latest`（非原始碼建置，Windows pnpm build 會失敗）
 
 ### Discord
-- allowlist + requireMention、groupPolicy: allowlist、dmPolicy: pairing
+- groupPolicy: "open"（guild 回應所有訊息）、dmPolicy: "open"
+- streaming: "off" + blockStreaming: **false**（完成後直接送出，不走 streaming pipeline）
+- **禁止** blockStreaming: true + streaming: "off" 組合（= deadlock，訊息永不送出）
+- dm: { enabled: true, policy: "allowlist", allowFrom: ["*"], groupEnabled: true, groupChannels: ["*"] }
+- allowBots: true、allowFrom: ["*"]
+- configWrites: true（允許 agent 透過 /config set 自行修改 Discord 設定）
+- replyToMode: "all"（回覆所有訊息使用 reply threading）
 
 ### LINE
 - ngrok 免費方案，URL 不固定，webhook 路徑：`/line/webhook`（不是 `/channels/line/webhook`）

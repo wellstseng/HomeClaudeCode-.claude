@@ -1,9 +1,15 @@
-# Gateway chat.send 與 LINE 訊息路由研究 (2026-03-04)
+# Atom: Gateway chat.send 與 LINE 訊息路由
 
-> Scope: WebSocket chat.send 行為 + LINE outbound delivery 機制
-> Source: OpenClaw 2026.3.1 source code (`gateway-cli-tzSO700C.js`, `deliver-GmIEfm3k.js`, `reply-XaR8IPbY.js`)
+- Scope: global
+- Confidence: [固]
+- Source: 2026-03-04 holylight — OpenClaw 2026.3.1 source code analysis
+- Last-used: 2026-03-04
+- Trigger: chat.send 行為、LINE 推送、cross-context messaging、session routing、deliverOutboundPayloads、OriginatingChannel、LINE Push API
+- Privacy: public
 
-## chat.send 行為（line 10699）
+## 知識
+
+### chat.send 行為（line 10699）
 
 ### 流程
 

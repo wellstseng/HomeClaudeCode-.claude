@@ -57,7 +57,25 @@ stdin (prompt JSON) → index.js
 | ID | 路徑 | 跳過 |
 |----|------|------|
 | cc-memory | `C:/Users/holyl/.claude/projects/e--OpenClawWorkSpace/memory/` | MEMORY.md |
-| openclaw-atoms | `E:/OpenClawWorkSpace/.openclaw/workspace/atoms/` | _identity-map, _pairing, _registry, _active |
+| openclaw-atoms | `E:/OpenClawWorkSpace/.openclaw/workspace/atoms/` | _identity-map, _pairing, _registry, _active, claude-code-delegation, workspace-access, system-health, decisions |
+
+### Precision@3 品質指標（2026-03-04 Tuning Pass）
+
+| 指標 | Offline(A4) | Full(A4+Vector+Reranker) |
+|------|-------------|--------------------------|
+| P@3 | 15.0% | **45.0%** |
+| R@3 | 30.0% | **85.0%** |
+| NDCG@3 | 31.1% | **82.5%** |
+| 零命中 | 13/20 | **0/20** |
+| 品質等級 | NEEDS IMPROVEMENT | ACCEPTABLE |
+
+Tuning Pass 修復項：
+- 3 個 atom metadata 格式修正（blockquote → 標準 `- Key: value`）
+- 4 個噪音 atom 加入 skipFiles（claude-code-delegation, workspace-access, system-health, decisions）
+- 3 個 atom Trigger 欄位豐富化（pitfalls, bridge, decisions）
+- Gate timeout 10s → 15s（qwen3:1.7b thinking model 需較長時間）
+- Reranker 啟用（qwen3:0.6b, weight=0.3, +0.4GB VRAM）
+- test-precision.js R@3 指標修正（cap at 1.0, dedup expected matches）
 
 ### 開發者五分類（非人事時地物）
 

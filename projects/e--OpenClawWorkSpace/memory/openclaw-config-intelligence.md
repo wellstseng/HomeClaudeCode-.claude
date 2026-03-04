@@ -101,9 +101,85 @@ webhook HTTP handler
 4. **"Config invalid"** → enum 值錯誤或引用了不存在的 plugin
 5. **Gateway 啟動失敗 exit 7** → 已有實例佔用 port，`openclaw gateway stop` 或 taskkill
 
+## Streaming & Delivery 語義
+
+| 欄位 | 層級 | 語義 | 預設值 |
+|------|------|------|--------|
+| `streaming` | channel | 預覽串流模式 | `"off"` |
+| `blockStreaming` | channel | 是否等完成再送 | `false` |
+| `blockStreamingDefault` | agent | 全域 block streaming 開關 | `"off"` |
+| `blockStreamingBreak` | agent | 何時 flush：`"text_end"`(段落完) / `"message_end"`(全訊息完) | `"text_end"` |
+| `blockStreamingCoalesce` | agent/channel | 合併連續片段：minChars/maxChars/idleMs | — |
+| `humanDelay` | agent | 仿人停頓：`"off"` / `"natural"`(800-2500ms) / `"custom"` | `"off"` |
+| `chunkMode` | channel | 分片策略：`"length"` / `"newline"` | — |
+| `textChunkLimit` | channel | 單訊息最大字元（Discord ~2000） | 2000 |
+| `maxLinesPerMessage` | channel | 單訊息最大行數 | 17 |
+| `draftChunk` | channel | block 模式分片設定：minChars/maxChars/breakPreference | — |
+
+**「整批完成才發」三件套**：`streaming: "off"` + `blockStreaming: true` + `blockStreamingBreak: "message_end"`
+
+**防連續發話**：`blockStreamingCoalesce.idleMs` 等待閒置時間後才 flush + `humanDelay.mode: "natural"` 加入仿人間隔
+
+## configWrites 自修改能力
+
+- `channels.discord.configWrites: true` → agent 可透過 `/config set` 命令修改自己的 Discord 設定
+- 範圍：整個 `channels.discord` 子樹，包含 policy、streaming、actions 等
+- 需搭配 `commands.native: "auto"` 或 `true`
+- 修改後 gateway 自動 hot-reload（部分設定需重啟）
+
+## Messages Queue 語義
+
+```json
+"messages": {
+  "inbound": { "debounceMs": 2000, "byChannel": { "discord": 10000 } },
+  "queue": {
+    "mode": "collect",      // collect|steer|followup|interrupt|queue|steer-backlog|steer+backlog
+    "debounceMs": 1000,
+    "cap": 20,
+    "drop": "summarize",    // old|new|summarize
+    "byChannel": { "discord": "collect" }
+  },
+  "ackReaction": "👀",
+  "ackReactionScope": "group-mentions",  // group-mentions|group-all|direct|all
+  "removeAckAfterReply": false,
+  "responsePrefix": "auto"               // "auto"|自訂字串, 支援 {model}/{identity.name} 等
+}
+```
+
+**Queue 模式**：`collect`=批次直到回應、`steer`=立即處理+佇列後續、`interrupt`=打斷當前處理、`followup`=分開回應
+
+## Typing Indicators
+
+```json
+"agents.defaults.typingMode": "instant"  // never|instant|thinking|message
+"agents.defaults.typingIntervalSeconds": 6
+```
+
+## Gateway Rate Limiting
+
+```json
+"gateway.auth.rateLimit": {
+  "maxAttempts": 10, "windowMs": 60000,
+  "lockoutMs": 300000, "exemptLoopback": true
+}
+```
+
+## Session Reset 策略
+
+```json
+"session": {
+  "reset": { "mode": "daily", "atHour": 4, "idleMinutes": 60 },
+  "resetByChannel": { "discord": { "mode": "idle", "idleMinutes": 10080 } }
+}
+```
+
+模式：`daily`（定時清除）/ `idle`（閒置 N 分鐘後清除）
+
 ## 行動
 
 - 新增 channel group 時：確認三層設定齊全（policy + entity + sender auth）
 - 200 OK 但靜默丟棄：開 verbose logging 或直接查 source code 的 shouldProcess 函式
-- 修改 config 後：必須重啟 gateway（config 不是 hot-reload）
+- 修改 config 後：多數設定 hot-reload 生效，部分（token、intents）需重啟 gateway
 - 除錯時：先用 curl 手動發 webhook 分離問題（簽名 vs 路由 vs LLM）
+- 調整 delivery 行為：先確認三件套（streaming + blockStreaming + blockStreamingBreak），再調 coalesce
+- 調整 queue 行為：先確認 queue.mode，再調 debounceMs 和 cap

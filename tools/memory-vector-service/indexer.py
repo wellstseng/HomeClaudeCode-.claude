@@ -285,7 +285,7 @@ class OllamaEmbedder:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=180) as resp:
             result = json.loads(resp.read())
         embeddings = result.get("embeddings", [])
         if embeddings and self._dimension is None:
@@ -368,18 +368,28 @@ def create_embedder(config: Dict[str, Any]) -> Any:
     raise RuntimeError("No embedding backend available. Install Ollama or sentence-transformers.")
 
 
-# ─── LanceDB Operations ──────────────────────────────────────────────────────
+# ─── ChromaDB Operations ─────────────────────────────────────────────────────
 
 
 DB_DIR = CLAUDE_DIR / "memory" / "_vectordb"
-TABLE_NAME = "atom_chunks"
+COLLECTION_NAME = "atom_chunks"
 
 
 def _get_db():
-    """Get LanceDB connection."""
-    import lancedb
+    """Get ChromaDB persistent client."""
+    import chromadb
     DB_DIR.mkdir(parents=True, exist_ok=True)
-    return lancedb.connect(str(DB_DIR))
+    return chromadb.PersistentClient(path=str(DB_DIR))
+
+
+def _get_collection(client=None):
+    """Get or create the atom_chunks collection."""
+    if client is None:
+        client = _get_db()
+    return client.get_or_create_collection(
+        name=COLLECTION_NAME,
+        metadata={"hnsw:space": "cosine"},
+    )
 
 
 def _cosine_similarity(a: List[float], b: List[float]) -> float:
@@ -399,7 +409,6 @@ def build_index(
     verbose: bool = False,
 ) -> Dict[str, Any]:
     """Build or update the vector index. Returns stats dict."""
-    import pyarrow as pa
     t0 = time.time()
 
     layers = discover_layers(
@@ -415,17 +424,25 @@ def build_index(
     if verbose:
         print(f"[indexer] Using embedder: {embedder.__class__.__name__}")
 
-    db = _get_db()
+    client = _get_db()
 
     # For incremental: load existing hashes
     existing_hashes: Dict[str, str] = {}
     if incremental:
         try:
-            table = db.open_table(TABLE_NAME)
-            rows = table.search().select(["layer", "atom_name", "file_hash"]).limit(table.count_rows()).to_list()
-            for row in rows:
-                key = f"{row.get('layer', '')}:{row.get('atom_name', '')}"
-                existing_hashes[key] = row.get("file_hash", "")
+            col = _get_collection(client)
+            if col.count() > 0:
+                all_meta = col.get(include=["metadatas"])
+                for meta in all_meta["metadatas"]:
+                    key = f"{meta.get('layer', '')}:{meta.get('atom_name', '')}"
+                    existing_hashes[key] = meta.get("file_hash", "")
+        except Exception:
+            pass
+
+    # For full rebuild: delete existing collection
+    if not incremental:
+        try:
+            client.delete_collection(COLLECTION_NAME)
         except Exception:
             pass
 
@@ -478,29 +495,48 @@ def build_index(
             vecs = embedder.embed(batch)
             all_vecs.extend(vecs)
 
-        for i, rec in enumerate(records):
-            rec["vector"] = all_vecs[i]
-
-    # Write to LanceDB
+    # Write to ChromaDB
     if records:
-        if incremental:
-            # Delete changed atoms first, then add new
-            try:
-                table = db.open_table(TABLE_NAME)
-                changed_atoms = {f"{r['layer']}:{r['atom_name']}" for r in records}
-                for ak in changed_atoms:
-                    layer_val, atom_val = ak.split(":", 1)
-                    table.delete(f"layer = '{layer_val}' AND atom_name = '{atom_val}'")
-                table.add(records)
-            except Exception:
-                # Table doesn't exist or other error → full write
-                db.create_table(TABLE_NAME, records, mode="overwrite")
-        else:
-            db.create_table(TABLE_NAME, records, mode="overwrite")
+        col = _get_collection(client)
 
-    elif not incremental:
-        # No records and full rebuild → create empty-ish table or skip
-        pass
+        if incremental:
+            # Delete changed atoms first
+            changed_atoms = {f"{r['layer']}:{r['atom_name']}" for r in records}
+            for ak in changed_atoms:
+                layer_val, atom_val = ak.split(":", 1)
+                try:
+                    existing = col.get(
+                        where={"$and": [{"layer": layer_val}, {"atom_name": atom_val}]}
+                    )
+                    if existing["ids"]:
+                        col.delete(ids=existing["ids"])
+                except Exception:
+                    pass
+
+        # Add records in batches (ChromaDB has limits)
+        chroma_batch = 5000
+        for i in range(0, len(records), chroma_batch):
+            batch_recs = records[i:i + chroma_batch]
+            batch_vecs = all_vecs[i:i + chroma_batch]
+            col.add(
+                ids=[r["chunk_id"] for r in batch_recs],
+                embeddings=batch_vecs,
+                documents=[r["text"] for r in batch_recs],
+                metadatas=[{
+                    "atom_name": r["atom_name"],
+                    "title": r["title"],
+                    "section": r["section"],
+                    "confidence": r["confidence"],
+                    "file_path": r["file_path"],
+                    "layer": r["layer"],
+                    "file_hash": r["file_hash"],
+                    "line_number": r["line_number"],
+                    "last_used": r.get("last_used", ""),
+                    "confirmations": r.get("confirmations", 0),
+                    "atom_type": r.get("atom_type", "semantic"),
+                    "tags": r.get("tags", ""),
+                } for r in batch_recs],
+            )
 
     elapsed = time.time() - t0
     stats = {
@@ -523,22 +559,24 @@ def build_index(
 def get_index_status(config: Dict[str, Any]) -> Dict[str, Any]:
     """Get current index status."""
     try:
-        db = _get_db()
-        table = db.open_table(TABLE_NAME)
-        total = table.count_rows()
-        # Use to_list() with select to avoid pandas dependency
-        rows = table.search().select(["atom_name", "layer"]).limit(total).to_list()
+        client = _get_db()
+        col = _get_collection(client)
+        total = col.count()
+        if total == 0:
+            return {"total_chunks": 0}
+
+        all_meta = col.get(include=["metadatas"])
         atoms = set()
         layer_set = set()
-        for row in rows:
-            atoms.add(f"{row.get('layer', '')}:{row.get('atom_name', '')}")
-            layer_set.add(row.get("layer", ""))
+        for meta in all_meta["metadatas"]:
+            atoms.add(f"{meta.get('layer', '')}:{meta.get('atom_name', '')}")
+            layer_set.add(meta.get("layer", ""))
 
         return {
             "total_chunks": total,
             "unique_atoms": len(atoms),
             "layers": sorted(layer_set),
-            "table": TABLE_NAME,
+            "collection": COLLECTION_NAME,
             "db_path": str(DB_DIR),
         }
     except Exception as e:
@@ -550,18 +588,38 @@ def search_vectors(
     top_k: int = 10,
     layer_filter: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Search LanceDB table by vector. Returns list of dicts with _distance."""
+    """Search ChromaDB collection by vector. Returns list of dicts with _distance."""
     try:
-        db = _get_db()
-        table = db.open_table(TABLE_NAME)
-        q = table.search(query_vec).limit(top_k).metric("cosine")
+        col = _get_collection()
+        where_filter = None
         if layer_filter and layer_filter not in ("all", None):
             if layer_filter == "global":
-                q = q.where(f"layer = 'global'")
+                where_filter = {"layer": "global"}
             elif layer_filter.startswith("project:"):
-                q = q.where(f"layer = '{layer_filter}'")
-        results = q.to_list()
-        return results
+                where_filter = {"layer": layer_filter}
+
+        kwargs = {
+            "query_embeddings": [query_vec],
+            "n_results": min(top_k, col.count()) if col.count() > 0 else top_k,
+        }
+        if where_filter:
+            kwargs["where"] = where_filter
+
+        results = col.query(**kwargs)
+
+        # Convert ChromaDB results to the format expected by searcher
+        output = []
+        if results and results["ids"] and results["ids"][0]:
+            for i, doc_id in enumerate(results["ids"][0]):
+                meta = results["metadatas"][0][i] if results["metadatas"] else {}
+                dist = results["distances"][0][i] if results["distances"] else 1.0
+                output.append({
+                    "chunk_id": doc_id,
+                    "text": results["documents"][0][i] if results["documents"] else "",
+                    "_distance": dist,
+                    **meta,
+                })
+        return output
     except Exception:
         return []
 
