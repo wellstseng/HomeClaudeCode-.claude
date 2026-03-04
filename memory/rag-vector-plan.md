@@ -4,7 +4,7 @@
 - Confidence: [固]
 - Trigger: RAG, vector, 向量, embedding, 語意, semantic, LanceDB, Ollama, 本地LLM, local LLM, sentence-transformers, qwen3-embedding, bge-m3
 - Last-used: 2026-03-04
-- Confirmations: 2
+- Confirmations: 3
 
 ## 知識
 
@@ -71,15 +71,28 @@ UserPromptSubmit (3s timeout)
 - [固] enhanced search min_score 0.65 太高（改寫查詢分數 ~0.4-0.54）→ 自動降為 min(config, 0.4)
 - [固] pip 在 Git Bash 不直接可用 → 使用 `python -m pip install`
 
-### v2.1 改進方向（已研究，待實作）
+### v2.1 Sprint 1（已完成）
 
-- [觀] 7 大缺陷已盤點：碎片化/TTL/衝突/噪音/intent/分層/隱私
-- [觀] 新 schema 欄位：Type, TTL, Expires-at, Related, Supersedes, Privacy, Tags, Quality
-- [觀] Write Gate：quality score + dedup 檢查（走 session-end 非即時路徑）
-- [觀] Conflict Detection：LLM 語意比對 AGREE/CONTRADICT/EXTEND/UNRELATED
-- [觀] Retrieval Ranking：0.45 semantic + 0.15 recency + 0.20 intent + 0.10 confidence + 0.10 confirmations
-- [觀] Decay --enforce：[臨]>30d 自動淘汰，[觀]>60d 提醒
-- [觀] Confirmations 自動遞增（guardian hook 更新 Last-used 時同步 ++）
+- [固] Schema v2.1：Type, TTL, Expires-at, Related, Supersedes, Privacy, Tags, Quality 欄位
+- [固] Write Gate：quality score + dedup 檢查（`memory-write-gate.py`）
+- [固] Decay --enforce：[臨]>30d 自動淘汰，[觀]>60d 標記 pending-review
+- [固] Confirmations 自動遞增（guardian hook 更新 Last-used 時同步 ++）
+
+### v2.1 Sprint 2（已完成）
+
+- [固] Task-Intent 分類器：rule-based zero LLM，debug/build/design/recall/general
+- [固] Retrieval Ranking：`/search/ranked` API，FinalScore = 0.45×Semantic + 0.15×Recency + 0.20×IntentBoost + 0.10×Confidence + 0.10×Confirmation
+- [固] indexer.py 擴充 metadata：last_used, confirmations, atom_type, tags 欄位進 LanceDB
+- [固] Related/Supersedes 關聯載入：觸發 atom A 時自動拉 A.Related 的摘要
+- [固] Conflict Detection：`memory-conflict-detector.py`，LLM 語意比對 AGREE/CONTRADICT/EXTEND/UNRELATED（session-end 離線路徑）
+- [固] Delete Propagation：`--delete`/`--purge` 全鏈清除（LanceDB + Related 引用 + MEMORY.md + 增量 re-index）
+
+### v2.1 Sprint 3（待實作）
+
+- [觀] Three-layer type 系統（semantic/episodic/procedural 差異化淘汰）
+- [觀] Episodic memory 自動產生（session 摘要）
+- [觀] Evolution log 合併 + Token budget 改善
+- [觀] Audit trail 完善 + Dashboard + 全面測試
 - 完整計畫：`_AIDocs/AtomicMemory-v2.1-Plan.md`
 
 ## 行動
@@ -89,12 +102,17 @@ UserPromptSubmit (3s timeout)
 - 手動全量重建：`python ~/.claude/tools/rag-engine.py index`
 - 手動搜尋：`python ~/.claude/tools/rag-engine.py search "查詢"`
 - 增強搜尋：`python ~/.claude/tools/rag-engine.py search "查詢" --enhanced`
-- **v2.1 實作**：讀 `_AIDocs/AtomicMemory-v2.1-Plan.md` 按 Sprint 1→2→3 順序
+- **v2.1 Sprint 3**：讀 `_AIDocs/AtomicMemory-v2.1-Plan.md` Phase 3 段落
+- 衝突掃描：`python ~/.claude/tools/memory-conflict-detector.py [--dry-run] [--atom X]`
+- 刪除 atom：`python ~/.claude/tools/memory-audit.py --delete <name> [--layer L] [--dry-run]`
+- 永久刪除：`python ~/.claude/tools/memory-audit.py --purge <name> [--layer L]`
 
 ## 演化日誌
 
 | 日期 | 變更 | 來源 |
 |------|------|------|
+| 2026-03-04 | v2.1 Sprint 2 完成：Intent 分類器 + Ranked Search + Related 載入 + Conflict Detector + Delete Propagation | session 實作 |
+| 2026-03-04 | v2.1 Sprint 1 完成：Schema + Write Gate + Decay --enforce + Confirmations++ | session 實作 |
 | 2026-03-04 | v2.1 缺陷研究完成：7 缺陷 + 6 系統比較 + schema + 路線圖，標為 [觀] 待實作 | session 研究 |
 | 2026-03-03 | 研究完成，建立為 [觀] | session 研究分析 |
 | 2026-03-03 | 全系統實作完成，晉升 [固]；ChromaDB→LanceDB、qwen3:4b→1.7b | session 實作測試 |

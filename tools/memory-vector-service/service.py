@@ -26,7 +26,7 @@ sys.path.insert(0, str(SERVICE_DIR))
 
 from config import load_config, VECTORDB_DIR
 from indexer import build_index, create_embedder, get_index_status
-from searcher import search, search_raw
+from searcher import search, search_raw, ranked_search
 
 # ─── Globals ─────────────────────────────────────────────────────────────────
 
@@ -97,6 +97,7 @@ class VectorServiceHandler(BaseHTTPRequestHandler):
 
         routes = {
             "/search": self._handle_search,
+            "/search/ranked": self._handle_search_ranked,
             "/health": self._handle_health,
             "/status": self._handle_status,
         }
@@ -162,6 +163,29 @@ class VectorServiceHandler(BaseHTTPRequestHandler):
         results = search(
             query=q,
             config=_config,
+            top_k=top_k,
+            min_score=min_score,
+            layer_filter=layer if layer != "all" else None,
+            embedder=_embedder,
+        )
+        self._send_json(results)
+
+    def _handle_search_ranked(self, params: Dict):
+        """GET /search/ranked?q=...&intent=general&top_k=5&min_score=0.50"""
+        q = params.get("q", [""])[0]
+        if not q:
+            self._send_error(400, "Missing query parameter 'q'")
+            return
+
+        intent = params.get("intent", ["general"])[0]
+        top_k = int(params.get("top_k", [str(_config.get("search_top_k", 5))])[0])
+        min_score = float(params.get("min_score", ["0.50"])[0])
+        layer = params.get("layer", ["all"])[0]
+
+        results = ranked_search(
+            query=q,
+            config=_config,
+            intent=intent,
             top_k=top_k,
             min_score=min_score,
             layer_filter=layer if layer != "all" else None,

@@ -130,6 +130,10 @@ def parse_and_chunk(
     atom_name = file_path.stem
     title = ""
     confidence = ""
+    last_used = ""
+    confirmations = 0
+    atom_type = "semantic"
+    tags_str = ""
     for line in lines:
         if line.startswith("# ") and not line.startswith("## "):
             title = line[2:].strip()
@@ -140,6 +144,16 @@ def parse_and_chunk(
                 # Extract [固]/[觀]/[臨]
                 cm = re.search(r"\[(固|觀|臨)\]", val)
                 confidence = f"[{cm.group(1)}]" if cm else val
+            elif key == "Last-used":
+                last_used = val
+            elif key == "Confirmations":
+                cm2 = re.search(r"\d+", val)
+                confirmations = int(cm2.group()) if cm2 else 0
+            elif key == "Type":
+                if val in ("semantic", "episodic", "procedural"):
+                    atom_type = val
+            elif key == "Tags":
+                tags_str = val
 
     fhash = file_hash(file_path)
     chunks: List[Dict[str, Any]] = []
@@ -172,6 +186,10 @@ def parse_and_chunk(
                     "layer": layer_name,
                     "file_hash": fhash,
                     "line_number": current_bullet_start,
+                    "last_used": last_used,
+                    "confirmations": confirmations,
+                    "atom_type": atom_type,
+                    "tags": tags_str,
                 })
             current_bullet_lines = []
 
@@ -441,6 +459,10 @@ def build_index(
                 "layer": chunk["layer"],
                 "file_hash": chunk["file_hash"],
                 "line_number": chunk["line_number"],
+                "last_used": chunk.get("last_used", ""),
+                "confirmations": chunk.get("confirmations", 0),
+                "atom_type": chunk.get("atom_type", "semantic"),
+                "tags": chunk.get("tags", ""),
             })
             total_chunks += 1
 

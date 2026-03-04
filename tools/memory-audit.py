@@ -596,6 +596,180 @@ def _append_evolution_entry(atom_path: Path, change: str, source: str = "memory-
         atom_path.write_text(text, encoding="utf-8")
 
 
+def delete_atom(
+    atom_name: str, layer: str = "global", purge: bool = False, dry_run: bool = False
+) -> Tuple[bool, str]:
+    """Delete an atom with full chain propagation (v2.1 Sprint 2).
+
+    Steps:
+    1. Locate atom file
+    2. LanceDB: delete all chunks for this atom
+    3. Scan Related references in other atoms → remove
+    4. Update MEMORY.md index → remove row
+    5. Move to _distant/ (or permanent delete if purge)
+    6. Trigger incremental re-index
+    7. Write audit.log
+    """
+    import urllib.request
+    import urllib.error
+
+    # 1. Locate atom file
+    layers = discover_layers()
+    atom_path = None
+    mem_dir = None
+    for layer_name, mdir in layers:
+        if layer_name == layer:
+            candidate = mdir / f"{atom_name}.md"
+            if candidate.exists():
+                atom_path = candidate
+                mem_dir = mdir
+                break
+
+    if atom_path is None:
+        return False, f"Atom '{atom_name}' not found in layer '{layer}'"
+
+    actions = []
+    mode = "PURGE" if purge else "DELETE"
+
+    if dry_run:
+        actions.append(f"[DRY-RUN] Would {mode.lower()} atom: {atom_name} (layer: {layer})")
+    else:
+        actions.append(f"[{mode}] Processing atom: {atom_name} (layer: {layer})")
+
+    # 2. LanceDB cleanup
+    try:
+        VECTORDB_DIR = CLAUDE_DIR / "memory" / "_vectordb"
+        if VECTORDB_DIR.exists():
+            import lancedb
+            db = lancedb.connect(str(VECTORDB_DIR))
+            try:
+                table = db.open_table("atom_chunks")
+                if dry_run:
+                    # Count rows that would be deleted
+                    rows = table.search().select(["atom_name", "layer"]).limit(10000).to_list()
+                    count = sum(1 for r in rows if r.get("atom_name") == atom_name and r.get("layer") == layer)
+                    actions.append(f"  [DRY-RUN] Would delete {count} LanceDB chunks")
+                else:
+                    table.delete(f"atom_name = '{atom_name}' AND layer = '{layer}'")
+                    actions.append("  LanceDB chunks deleted")
+            except Exception as e:
+                actions.append(f"  LanceDB: {e}")
+    except ImportError:
+        actions.append("  LanceDB: not installed (skipped)")
+
+    # 3. Scan Related references in other atoms → remove
+    related_cleaned = 0
+    for layer_name, mdir in layers:
+        for md_file in sorted(mdir.glob("*.md")):
+            if md_file.name == MEMORY_INDEX or md_file == atom_path:
+                continue
+            if any(md_file.name.startswith(p) for p in SKIP_PREFIXES):
+                continue
+            try:
+                text = md_file.read_text(encoding="utf-8-sig")
+            except (OSError, UnicodeDecodeError):
+                continue
+            changed = False
+            new_lines = []
+            for line in text.splitlines():
+                if line.strip().startswith("- Related:"):
+                    m = re.match(r"^(- Related:\s*)(.+)$", line)
+                    if m:
+                        related_list = [r.strip() for r in m.group(2).split(",")]
+                        filtered = [r for r in related_list if r and r != atom_name]
+                        if len(filtered) != len(related_list):
+                            changed = True
+                            related_cleaned += 1
+                            if filtered:
+                                new_lines.append(f"- Related: {', '.join(filtered)}")
+                            # else: remove the line entirely
+                            continue
+                if line.strip().startswith("- Supersedes:"):
+                    m = re.match(r"^(- Supersedes:\s*)(.+)$", line)
+                    if m:
+                        sup_list = [s.strip() for s in m.group(2).split(",")]
+                        if atom_name in sup_list:
+                            actions.append(f"  WARNING: {md_file.stem} supersedes deleted atom {atom_name}")
+                new_lines.append(line)
+            if changed and not dry_run:
+                md_file.write_text("\n".join(new_lines), encoding="utf-8")
+    if related_cleaned:
+        actions.append(f"  Related references cleaned: {related_cleaned} atom(s)")
+
+    # 4. Update MEMORY.md index
+    if mem_dir:
+        index_path = mem_dir / "MEMORY.md"
+        if index_path.exists():
+            try:
+                idx_text = index_path.read_text(encoding="utf-8-sig")
+                new_idx_lines = []
+                removed = False
+                for line in idx_text.splitlines():
+                    # Match table row containing atom name
+                    if line.strip().startswith("|") and f"| {atom_name} " in line:
+                        removed = True
+                        continue
+                    new_idx_lines.append(line)
+                if removed:
+                    if dry_run:
+                        actions.append("  [DRY-RUN] Would remove MEMORY.md index row")
+                    else:
+                        index_path.write_text("\n".join(new_idx_lines), encoding="utf-8")
+                        actions.append("  MEMORY.md index row removed")
+            except (OSError, UnicodeDecodeError) as e:
+                actions.append(f"  MEMORY.md update failed: {e}")
+
+    # 5. Move/remove file
+    if not dry_run:
+        _append_evolution_entry(atom_path, f"{'永久刪除' if purge else '刪除移入 _distant/'}", "memory-audit --delete")
+        if purge:
+            try:
+                os.remove(str(atom_path))
+                actions.append(f"  File permanently deleted: {atom_path.name}")
+            except OSError as e:
+                actions.append(f"  File delete failed: {e}")
+                return False, "\n".join(actions)
+        else:
+            ok, msg = move_to_distant(atom_path)
+            actions.append(f"  {msg}")
+            if not ok:
+                return False, "\n".join(actions)
+
+    # 6. Trigger incremental re-index
+    if not dry_run:
+        try:
+            req = urllib.request.Request(
+                "http://127.0.0.1:3849/index/incremental",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            urllib.request.urlopen(req, timeout=2)
+            actions.append("  Incremental re-index triggered")
+        except Exception:
+            actions.append("  Incremental re-index: service not available (skipped)")
+
+    # 7. Audit log
+    audit_entry = {
+        "ts": datetime.now().isoformat(timespec="seconds"),
+        "action": "purge" if purge else "delete",
+        "atom": atom_name,
+        "layer": layer,
+        "purge": purge,
+    }
+    if not dry_run:
+        audit_log = CLAUDE_DIR / "memory" / "_vectordb" / "audit.log"
+        audit_log.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(audit_log, "a", encoding="utf-8") as f:
+                f.write(json.dumps(audit_entry, ensure_ascii=False) + "\n")
+            actions.append("  Audit log entry written")
+        except OSError:
+            pass
+
+    return True, "\n".join(actions)
+
+
 def enforce_decay(args: argparse.Namespace) -> None:
     """Execute automated decay: move stale [臨] to _distant/, mark stale [觀] as pending-review."""
     today = date.today()
@@ -948,12 +1122,28 @@ def main():
     parser.add_argument("--dry-run", action="store_true",
                         help="搭配 --enforce，只報告不執行")
 
+    # Delete propagation (v2.1 Sprint 2)
+    parser.add_argument("--delete", type=str, metavar="ATOM_NAME",
+                        help="刪除 atom（移入 _distant/），全鏈清除 LanceDB + Related 引用 + MEMORY.md 索引")
+    parser.add_argument("--purge", type=str, metavar="ATOM_NAME",
+                        help="永久刪除 atom（不移入 _distant/），全鏈清除")
+    parser.add_argument("--layer", type=str, default="global",
+                        help="搭配 --delete/--purge 指定層（default: global）")
+
     # Distant memory operations
     parser.add_argument("--search-distant", type=str, metavar="KEYWORD", help="搜尋遙遠記憶區")
     parser.add_argument("--restore", type=str, metavar="PATH", help="從遙遠記憶拉回活躍區")
     parser.add_argument("--move-distant", type=str, metavar="PATH", help="手動移入遙遠記憶")
 
     args = parser.parse_args()
+
+    # Handle delete/purge (v2.1 Sprint 2)
+    if args.delete or args.purge:
+        atom_name = args.delete or args.purge
+        purge = bool(args.purge)
+        ok, msg = delete_atom(atom_name, args.layer, purge=purge, dry_run=args.dry_run)
+        print(msg)
+        sys.exit(0 if ok else 1)
 
     # Handle distant memory operations
     if args.search_distant:

@@ -2,12 +2,100 @@
 searcher.py — 語意搜尋引擎
 
 使用 LanceDB 進行向量搜尋。
+v2.1: ranked_search() 加入 intent-aware 多因子排序。
 """
 
 import json
+from datetime import date
 from typing import Any, Dict, List, Optional
 
 from indexer import create_embedder, search_vectors
+
+
+# ─── v2.1 Ranking Constants ──────────────────────────────────────────────────
+
+CONFIDENCE_SCORE_MAP = {"[固]": 1.0, "[觀]": 0.7, "[臨]": 0.4}
+
+# (atom_category, intent) → boost multiplier (0.5-1.5)
+INTENT_WEIGHT = {
+    ("pitfall", "debug"): 1.5, ("pitfall", "build"): 1.0,
+    ("pitfall", "design"): 0.8, ("pitfall", "recall"): 1.0,
+    ("decision", "debug"): 0.8, ("decision", "build"): 1.0,
+    ("decision", "design"): 1.3, ("decision", "recall"): 1.5,
+    ("procedural", "debug"): 0.8, ("procedural", "build"): 1.5,
+    ("procedural", "design"): 0.8, ("procedural", "recall"): 0.8,
+    ("architecture", "debug"): 0.7, ("architecture", "build"): 1.0,
+    ("architecture", "design"): 1.5, ("architecture", "recall"): 1.0,
+    ("preference", "debug"): 0.5, ("preference", "build"): 0.8,
+    ("preference", "design"): 1.0, ("preference", "recall"): 1.0,
+}
+
+
+def _classify_atom_category(hit: Dict[str, Any]) -> str:
+    """Classify atom into a category for intent boosting (rule-based)."""
+    tags = hit.get("tags", "").lower()
+    atom_type = hit.get("atom_type", "")
+    name = hit.get("atom_name", "").lower()
+
+    if any(k in tags for k in ("pitfall", "陷阱", "坑")):
+        return "pitfall"
+    if any(k in tags for k in ("architecture", "架構")):
+        return "architecture"
+    if atom_type == "procedural" or any(k in tags for k in ("操作", "recipe", "procedural")):
+        return "procedural"
+    if any(k in tags for k in ("decision", "決策")) or "decision" in name:
+        return "decision"
+    if any(k in tags for k in ("preference", "偏好")) or "preference" in name:
+        return "preference"
+    return "general"
+
+
+def _compute_final_score(hit: Dict[str, Any], intent: str) -> Dict[str, Any]:
+    """Compute weighted final score. Returns breakdown dict."""
+    semantic = hit.get("score", 0.0)
+
+    # Recency
+    last_used = hit.get("last_used", "")
+    if last_used:
+        try:
+            days = (date.today() - date.fromisoformat(last_used)).days
+            recency = max(0.0, 1.0 - days / 90)
+        except ValueError:
+            recency = 0.5
+    else:
+        recency = 0.5
+
+    # Intent boost
+    cat = _classify_atom_category(hit)
+    intent_boost = INTENT_WEIGHT.get((cat, intent), 1.0)
+
+    # Confidence
+    conf = CONFIDENCE_SCORE_MAP.get(hit.get("confidence", ""), 0.5)
+
+    # Confirmations
+    confirms = hit.get("confirmations", 0)
+    if isinstance(confirms, str):
+        try:
+            confirms = int(confirms)
+        except ValueError:
+            confirms = 0
+    confirm_score = min(0.2, confirms * 0.05)
+
+    final = (0.45 * semantic
+             + 0.15 * recency
+             + 0.20 * intent_boost
+             + 0.10 * conf
+             + 0.10 * confirm_score)
+
+    return {
+        "final_score": round(final, 4),
+        "semantic": round(semantic, 4),
+        "recency": round(recency, 4),
+        "intent_boost": round(intent_boost, 2),
+        "confidence_score": round(conf, 2),
+        "confirm_score": round(confirm_score, 4),
+        "category": cat,
+    }
 
 
 def search(
@@ -83,6 +171,86 @@ def search(
         })
 
     hits.sort(key=lambda x: x["score"], reverse=True)
+    return hits[:top_k]
+
+
+def ranked_search(
+    query: str,
+    config: Dict[str, Any],
+    intent: str = "general",
+    top_k: int = 5,
+    min_score: float = 0.50,
+    layer_filter: Optional[str] = None,
+    embedder=None,
+) -> List[Dict[str, Any]]:
+    """Intent-aware ranked search (v2.1).
+
+    Uses multi-factor scoring: 0.45*Semantic + 0.15*Recency + 0.20*IntentBoost
+    + 0.10*Confidence + 0.10*Confirmation.
+    """
+    if not query.strip():
+        return []
+
+    if embedder is None:
+        embedder = create_embedder(config)
+
+    query_vec = embedder.embed([query])
+    if not query_vec or not query_vec[0]:
+        return []
+
+    raw_results = search_vectors(
+        query_vec[0],
+        top_k=top_k * 4,  # Fetch extra for dedup + re-ranking
+        layer_filter=layer_filter,
+    )
+    if not raw_results:
+        return []
+
+    # Dedup by atom (keep best semantic chunk per atom)
+    hits: List[Dict[str, Any]] = []
+    seen_atoms: Dict[str, float] = {}
+
+    for row in raw_results:
+        distance = row.get("_distance", 1.0)
+        score = 1.0 - distance
+
+        if score < min_score:
+            continue
+
+        atom_key = f"{row.get('layer', '')}:{row.get('atom_name', '')}"
+
+        if layer_filter == "project" and not row.get("layer", "").startswith("project:"):
+            continue
+
+        if atom_key in seen_atoms:
+            if score <= seen_atoms[atom_key]:
+                continue
+        seen_atoms[atom_key] = score
+        hits = [h for h in hits if f"{h['layer']}:{h['atom_name']}" != atom_key]
+
+        hits.append({
+            "atom_name": row.get("atom_name", ""),
+            "title": row.get("title", ""),
+            "section": row.get("section", ""),
+            "text": row.get("text", ""),
+            "score": round(score, 4),
+            "confidence": row.get("confidence", ""),
+            "file_path": row.get("file_path", ""),
+            "layer": row.get("layer", ""),
+            "line_number": int(row.get("line_number", 0)),
+            "last_used": row.get("last_used", ""),
+            "confirmations": row.get("confirmations", 0),
+            "atom_type": row.get("atom_type", "semantic"),
+            "tags": row.get("tags", ""),
+        })
+
+    # Apply multi-factor ranking
+    for hit in hits:
+        breakdown = _compute_final_score(hit, intent)
+        hit["final_score"] = breakdown["final_score"]
+        hit["score_breakdown"] = breakdown
+
+    hits.sort(key=lambda x: x["final_score"], reverse=True)
     return hits[:top_k]
 
 

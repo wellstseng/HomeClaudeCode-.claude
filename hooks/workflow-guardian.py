@@ -260,6 +260,30 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
+# ─── Intent Classifier (v2.1 Sprint 2) ───────────────────────────────────────
+
+INTENT_PATTERNS = {
+    "debug": ["crash", "error", "bug", "失敗", "壞", "exception", "為什麼",
+              "why", "問題", "traceback", "報錯", "修復", "fix"],
+    "build": ["build", "deploy", "建置", "部署", "安裝", "install", "啟動",
+              "setup", "config", "設定", "配置", "環境"],
+    "design": ["設計", "架構", "design", "architecture", "重構", "refactor",
+               "新增", "planning", "實作", "implement", "方案"],
+    "recall": ["之前", "上次", "記得", "決策", "決定", "為什麼選",
+               "remember", "previous", "history"],
+}
+
+
+def classify_intent(prompt: str) -> str:
+    """Rule-based intent classifier. Zero LLM overhead (~1ms)."""
+    prompt_lower = prompt.lower()
+    scores = {}
+    for intent, keywords in INTENT_PATTERNS.items():
+        scores[intent] = sum(1 for kw in keywords if kw in prompt_lower)
+    best = max(scores, key=scores.get)
+    return best if scores[best] > 0 else "general"
+
+
 # ─── Vector Service Helpers ───────────────────────────────────────────────────
 
 
@@ -292,9 +316,13 @@ def _ensure_vector_service(config: Dict[str, Any]) -> None:
         pass  # Non-critical
 
 
-def _semantic_search(prompt: str, config: Dict[str, Any]) -> List[Tuple[str, str, List[str]]]:
-    """Query Memory Vector Service. Returns AtomEntry list on success, [] on any failure.
+def _semantic_search(
+    prompt: str, config: Dict[str, Any], intent: str = "general"
+) -> List[Tuple[str, str, List[str]]]:
+    """Query Memory Vector Service with intent-aware ranked search (v2.1).
 
+    Uses /search/ranked endpoint (multi-factor scoring). Falls back to /search
+    if ranked endpoint is unavailable.
     Timeout: 2 seconds. Any error → graceful fallback to keyword-only.
     """
     vs_config = config.get("vector_search", {})
@@ -307,11 +335,27 @@ def _semantic_search(prompt: str, config: Dict[str, Any]) -> List[Tuple[str, str
 
     try:
         import urllib.parse
-        params = urllib.parse.urlencode({"q": prompt, "top_k": top_k, "min_score": min_score})
-        url = f"http://127.0.0.1:{port}/search?{params}"
+        # Try ranked search first (v2.1)
+        params = urllib.parse.urlencode({
+            "q": prompt, "top_k": top_k,
+            "min_score": min(min_score, 0.50),  # Lower threshold for ranked search
+            "intent": intent,
+        })
+        url = f"http://127.0.0.1:{port}/search/ranked?{params}"
         req = urllib.request.Request(url, headers={"Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
-            results = json.loads(resp.read())
+        try:
+            with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                results = json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                # Fallback to basic search (old service version)
+                params = urllib.parse.urlencode({"q": prompt, "top_k": top_k, "min_score": min_score})
+                url = f"http://127.0.0.1:{port}/search?{params}"
+                req = urllib.request.Request(url, headers={"Accept": "application/json"})
+                with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                    results = json.loads(resp.read())
+            else:
+                raise
         # Convert to AtomEntry format: (name, file_path, [])
         entries: List[Tuple[str, str, List[str]]] = []
         seen = set()
@@ -449,9 +493,12 @@ def handle_user_prompt_submit(
         if name not in already_injected and any(kw in prompt_lower for kw in triggers):
             matched_with_dir.append(((name, rel_path, triggers), base_dir))
 
-    # ── Semantic search (supplement) ─────────────────────────────────
+    # ── Intent classification (v2.1) ────────────────────────────────
+    intent = classify_intent(prompt)
+
+    # ── Semantic search (supplement, ranked by intent v2.1) ──────
     kw_matched_names = {e[0][0] for e in matched_with_dir}
-    sem_atoms = _semantic_search(prompt, config)
+    sem_atoms = _semantic_search(prompt, config, intent=intent)
     for sem_name, sem_path, _ in sem_atoms:
         if sem_name in kw_matched_names or sem_name in already_injected:
             continue
@@ -489,6 +536,36 @@ def handle_user_prompt_submit(
                 atom_lines.append(f"[Atom:{name}] {first_line} (full: Read {display_path})")
                 newly_injected.append(name)
                 break
+
+        # ── Related atom auto-loading (v2.1 Sprint 2) ─────────────
+        RELATED_RE = re.compile(r"^- Related:\s*(.+)", re.MULTILINE)
+        for (name, rel_path, triggers), base_dir in list(matched_with_dir):
+            atom_path = (base_dir / rel_path) if rel_path else (base_dir / "memory" / f"{name}.md")
+            if not atom_path.exists():
+                continue
+            try:
+                atom_text = atom_path.read_text(encoding="utf-8-sig")
+            except (OSError, UnicodeDecodeError):
+                continue
+            rm = RELATED_RE.search(atom_text)
+            if not rm:
+                continue
+            related_names = [r.strip() for r in rm.group(1).split(",") if r.strip()]
+            for rn in related_names:
+                if rn in already_injected or rn in newly_injected:
+                    continue
+                # Find related atom in all_atoms
+                for (aname, arel, atrig), abase in all_atoms:
+                    if aname == rn:
+                        rpath = (abase / arel) if arel else (abase / "memory" / f"{rn}.md")
+                        if rpath.exists():
+                            try:
+                                first_line = rpath.read_text(encoding="utf-8-sig").split("\n", 1)[0].strip("# ").strip()
+                            except (OSError, UnicodeDecodeError):
+                                break
+                            atom_lines.append(f"[Atom:{rn}] (related\u2192{name}) {first_line}")
+                            newly_injected.append(rn)
+                        break
 
         if atom_lines:
             lines.append("[Guardian:Memory] Trigger-matched atoms loaded:")
