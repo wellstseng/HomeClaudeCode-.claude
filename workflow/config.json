@@ -21,7 +21,15 @@
     "search_min_score": 0.45,
     "search_timeout_ms": 2000,
     "auto_start_service": true,
-    "auto_index_on_change": true
+    "auto_index_on_change": true,
+    "additional_atom_dirs": [
+      {
+        "name": "openclaw",
+        "path": "E:/OpenClawWorkSpace/.openclaw/workspace/atoms",
+        "recursive": true,
+        "skip_files": ["decisions", "system-health", "claude-code-delegation", "workspace-access", "_active"]
+      }
+    ]
   },
   "write_gate": {
     "enabled": true,

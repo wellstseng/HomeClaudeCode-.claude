@@ -1,11 +1,15 @@
-# Atom: Claude Code 記憶 V2 (CC Memory V2)
+# Atom: Claude Code 記憶 V2 (CC Memory V2) [DEPRECATED]
 
 - Scope: global
 - Confidence: [固]
 - Source: 2026-03-04 實作完成
-- Last-used: 2026-03-04
+- Last-used: 2026-03-05
 - Trigger: Claude Code 記憶 V2, memory-v2, UserPromptSubmit hook, CC atom 自動檢索, 向量搜尋 CC, 開發者分類, memory-v2 bug, hook 設定
 - Privacy: public
+- Supersedes: —
+- Superseded-by: 原子記憶 V2.3 Python（~/.claude/tools/memory-vector-service/）
+
+> **DEPRECATED (2026-03-05)**: Node.js memory-v2 hook 已移除，由原子記憶 V2.3 Python 版（workflow-guardian + rag-engine）取代。腳本保留在 `.claude/scripts/memory-v2/` 備回退。
 
 ## 知識
 
