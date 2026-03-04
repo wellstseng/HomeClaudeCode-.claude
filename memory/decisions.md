@@ -4,7 +4,7 @@
 - Confidence: [固]
 - Trigger: 全域決策, 工具, 工作流, workflow, 設定, config, 記住, guardian, hooks, MCP
 - Last-used: 2026-03-04
-- Confirmations: 7
+- Confirmations: 8
 
 ## 知識
 
@@ -16,9 +16,13 @@
 - [固] OpenClaw 的 atoms/ 目錄僅歸屬 OpenClaw，不作為 Claude Code 全域 atom 來源
 - [固] Workflow Guardian：hooks 事件驅動的工作流監督系統，自動追蹤修改、Stop 閘門阻止未同步結束、Atom Last-used 自動刷新
 - [固] session ID 支援 prefix match（截短 8 碼即可操作 workflow_signal 等工具）
-- [固] sync_completed 信號自動清空 knowledge_queue + modified_files
+- [固] sync_completed 信號自動清空 knowledge_queue + modified_files，並寫入 `ended_at` 供 auto-cleanup 使用
+- [固] **Session state auto-cleanup 三層策略**：Tier 1（有 ended_at，1min TTL）、Tier 2（orphan done 無 ended_at，30min）、Tier 3（stale working，24h）。TTL 可在 `config.json` 的 `cleanup` 區塊調整
+- [固] SessionEnd hook `async: true` 導致 `ended_at` 從未被 Python hook 寫入；靠 sync_completed 信號補寫 + 三層 fallback 解決
 - [固] 工作結束同步須根據情境判斷適用步驟（有 _AIDocs 才更新 _CHANGELOG，有 .git/.svn 才版控）
 - [固] **MCP stdio 傳輸格式**: Claude Code v2.x 使用 JSONL（`{...}\n`），不是 Content-Length header。自寫 MCP server 必須用 JSONL + protocolVersion `2025-11-25`，否則 30 秒超時 failed
+- [固] **Dashboard v2.1**: Tabbed UI（Sessions/Episodic/Health/Tests/Vector），API: /api/episodic, /api/health, /api/test-run, /api/vector-status, /api/knowledge-queue
+- [固] Node.js `exec` > `execFile` on Windows：`execFile` 找不到 Python（WindowsApps stub），`exec` 透過 shell 可正常解析 PATH；路徑需用正斜線避免反斜線被 shell 當逸出字元
 
 ## 行動
 

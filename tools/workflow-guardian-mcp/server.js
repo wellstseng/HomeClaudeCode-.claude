@@ -120,23 +120,53 @@ function deriveSessionName(cwd) {
 }
 
 function listAllSessions() {
-  const DONE_TTL_MS = 60 * 1000; // 1 minute: auto-cleanup finished sessions
+  const cfg = loadConfig().cleanup || {};
+  const DONE_TTL_MS    = cfg.ended_ttl_ms          || 60 * 1000;          // 1 min
+  const ORPHAN_DONE_MS = cfg.orphan_done_ttl_ms     || 30 * 60 * 1000;    // 30 min
+  const ORPHAN_WORK_MS = cfg.orphan_working_ttl_ms  || 24 * 60 * 60 * 1000; // 24 hr
+
   return listStatePaths().map((p) => {
     try {
       const state = JSON.parse(fs.readFileSync(p, "utf-8"));
       const sid = state.session?.id || path.basename(p).replace("state-", "").replace(".json", "");
+      const now = Date.now();
 
-      // Auto-cleanup: delete state files for sessions done > 1 min ago
+      // ── Auto-cleanup (3-tier) ─────────────────────────────────────
+      const safeTs = (v) => { const t = new Date(v).getTime(); return isNaN(t) ? 0 : t; };
+
+      // Tier 1: ended_at is set → clean after 1 min
       if (state.ended_at) {
-        const endedAge = Date.now() - new Date(state.ended_at).getTime();
+        const endedAge = now - safeTs(state.ended_at);
         if (endedAge > DONE_TTL_MS) {
+          process.stderr.write(`[guardian] cleanup: ended session ${sid.slice(0,8)} (${Math.round(endedAge/60000)}min)\n`);
           try { fs.unlinkSync(p); } catch {}
           return null;
         }
       }
 
+      // Tier 2: phase=done but no ended_at (orphan) → clean after 30 min
+      if (!state.ended_at && state.phase === "done") {
+        const lu = safeTs(state.last_updated);
+        if (lu && (now - lu) > ORPHAN_DONE_MS) {
+          process.stderr.write(`[guardian] cleanup: orphan-done ${sid.slice(0,8)} (${Math.round((now-lu)/60000)}min idle)\n`);
+          try { fs.unlinkSync(p); } catch {}
+          return null;
+        }
+      }
+
+      // Tier 3: not done, no ended_at, no activity for 24h → dead session
+      if (!state.ended_at && state.phase !== "done") {
+        const ref = safeTs(state.last_updated) || safeTs(state.session?.started_at);
+        if (ref && (now - ref) > ORPHAN_WORK_MS) {
+          process.stderr.write(`[guardian] cleanup: stale-working ${sid.slice(0,8)} (${Math.round((now-ref)/3600000)}h idle)\n`);
+          try { fs.unlinkSync(p); } catch {}
+          return null;
+        }
+      }
+
+      // ── Build session info ────────────────────────────────────────
       const startedAt = state.session?.started_at || "";
-      const ageMs = startedAt ? Date.now() - new Date(startedAt).getTime() : 0;
+      const ageMs = startedAt ? now - new Date(startedAt).getTime() : 0;
       return {
         session_id: sid,
         name: deriveSessionName(state.session?.cwd),
@@ -395,6 +425,7 @@ function toolWorkflowSignal(id, args) {
       state.sync_pending = false;
       state.knowledge_queue = [];
       state.modified_files = [];
+      state.ended_at = new Date().toISOString();
       break;
     case "reset":
       state.phase = "working";
@@ -1251,6 +1282,7 @@ const httpServer = http.createServer((req, res) => {
             state.sync_pending = false;
             state.knowledge_queue = [];
             state.modified_files = [];
+            state.ended_at = new Date().toISOString();
             break;
           case "reset":
             state.phase = "working";

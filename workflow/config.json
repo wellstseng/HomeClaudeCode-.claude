@@ -35,6 +35,11 @@
     "min_files": 1,
     "min_duration_seconds": 120
   },
+  "cleanup": {
+    "ended_ttl_ms": 60000,
+    "orphan_done_ttl_ms": 1800000,
+    "orphan_working_ttl_ms": 86400000
+  },
   "decay": {
     "enforce_on_audit": false,
     "staleness_thresholds": {"[固]": 90, "[觀]": 60, "[臨]": 30},
