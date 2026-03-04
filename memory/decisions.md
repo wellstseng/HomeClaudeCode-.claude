@@ -4,7 +4,7 @@
 - Confidence: [固]
 - Trigger: 全域決策, 工具, 工作流, workflow, guardian, hooks, MCP, 記憶系統
 - Last-used: 2026-03-05
-- Confirmations: 4
+- Confirmations: 5
 - Type: decision
 
 ## 知識
@@ -28,6 +28,7 @@
 
 ## 演化日誌
 
+- 2026-03-05: 建立 README.md（哲學/Token比較/流程圖/大型專案使用法）+ Install-forAI.md 安裝指南
 - 2026-03-05: V2.3 合併安裝，從公司版遷移核心工具鏈到家用電腦
 - 2026-03-05: LanceDB → ChromaDB（i7-3770 不支援 AVX2，LanceDB search crash）
 - 2026-03-05: embedding model 指定 qwen3-embedding:0.6b（避免 latest 4.7GB 版 timeout）
