@@ -15,6 +15,7 @@ import json
 import os
 import sys
 import re
+import threading
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
@@ -701,6 +702,15 @@ def handle_user_prompt_submit(
     prompt = input_data.get("prompt", "")
     lines: List[str] = []
 
+    # ─── V2.4: Collect pending extraction from last turn ──────────────
+    pending = state.pop("pending_extraction", [])
+    if pending:
+        state.setdefault("knowledge_queue", []).extend(pending)
+        lines.append(
+            f"[V2.4] {len(pending)} knowledge items captured from last response: "
+            + "; ".join(f"[{p.get('knowledge_type','?')}] {p['content'][:50]}" for p in pending)
+        )
+
     # ─── Phase 0: Session Context Injection (first prompt only) ────────
     budget = compute_token_budget(prompt)
     if not state.get("session_context_injected", False):
@@ -965,6 +975,19 @@ def handle_user_prompt_submit(
     else:
         output_nothing()
 
+    # ─── V2.4: Launch background extraction of last assistant response ──
+    rc = config.get("response_capture", {})
+    if rc.get("enabled", True) and rc.get("per_turn_enabled", True):
+        cwd = state.get("session", {}).get("cwd", "")
+        if cwd and state.get("session_context_injected", False):
+            # Only after first prompt (there's no previous response on first prompt)
+            t = threading.Thread(
+                target=_async_extract_last_response,
+                args=(session_id, cwd, config),
+                daemon=True,
+            )
+            t.start()
+
 
 def handle_post_tool_use(input_data: Dict[str, Any], config: Dict[str, Any]) -> None:
     session_id = input_data.get("session_id", "")
@@ -1127,6 +1150,235 @@ def _extract_area(path_str: str) -> str:
     # Take first 2 meaningful segments
     slug_parts = parts[:2] if len(parts) >= 2 else parts[:1]
     return "-".join(slug_parts).lower() if slug_parts else "misc"
+
+
+# ─── V2.4: Response Knowledge Capture ─────────────────────────────────────
+
+def _find_session_transcript(session_id: str, cwd: str) -> Optional[Path]:
+    """Locate the JSONL transcript for this session.
+
+    Path format: ~/.claude/projects/{slug}/{session_id}.jsonl
+    """
+    if not session_id or not cwd:
+        return None
+    slug = cwd_to_project_slug(cwd)
+    candidate = CLAUDE_DIR / "projects" / slug / f"{session_id}.jsonl"
+    if candidate.exists():
+        return candidate
+    return None
+
+
+def _extract_last_assistant_text(transcript_path: Path, max_chars: int = 3000) -> str:
+    """Extract the last assistant text response from a JSONL transcript.
+
+    Reads from end, skips thinking/tool_use blocks, returns text only.
+    """
+    try:
+        with open(transcript_path, "r", encoding="utf-8") as f:
+            lines_raw = f.readlines()
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+    # Scan from end to find last assistant message with text content
+    for raw_line in reversed(lines_raw):
+        try:
+            obj = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        if obj.get("type") != "assistant":
+            continue
+        content = obj.get("message", {}).get("content", [])
+        if not isinstance(content, list):
+            continue
+        texts = []
+        total = 0
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                t = block.get("text", "")
+                if t:
+                    texts.append(t)
+                    total += len(t)
+                    if total >= max_chars:
+                        break
+        if texts:
+            combined = "\n".join(texts)
+            return combined[:max_chars]
+    return ""
+
+
+def _extract_all_assistant_texts(transcript_path: Path, max_chars: int = 20000) -> List[str]:
+    """Extract all assistant text responses from a JSONL transcript (for SessionEnd)."""
+    texts = []
+    total = 0
+    try:
+        with open(transcript_path, "r", encoding="utf-8") as f:
+            for raw_line in f:
+                try:
+                    obj = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    continue
+                if obj.get("type") != "assistant":
+                    continue
+                content = obj.get("message", {}).get("content", [])
+                if not isinstance(content, list):
+                    continue
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        t = block.get("text", "")
+                        if t and len(t) > 30:  # skip trivial responses
+                            texts.append(t)
+                            total += len(t)
+                if total >= max_chars:
+                    break
+    except (OSError, UnicodeDecodeError):
+        pass
+    return texts
+
+
+def _call_ollama_generate(prompt: str, model: str = "qwen3:1.7b",
+                          timeout: int = 3) -> str:
+    """Call Ollama generate API. Returns raw response text."""
+    payload = json.dumps({
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+        "options": {"temperature": 0.1, "num_predict": 500}
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        "http://127.0.0.1:11434/api/generate",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read())
+            return data.get("response", "")
+    except Exception:
+        return ""
+
+
+_EXTRACT_PROMPT_TEMPLATE = (
+    "Extract reusable technical knowledge from this AI assistant response. "
+    "Output a JSON array of objects, each with 'content' (max 80 chars, concise fact) "
+    "and 'type' (one of: factual, procedural, architectural, pitfall). "
+    "Only extract: root causes, API behaviors, architecture constraints, "
+    "debugging patterns, configuration values, environment-specific behaviors. "
+    "Skip: code changes, general programming knowledge, session-specific details, greetings. "
+    "If nothing worth extracting, output empty array [].\n\n"
+    "Response text:\n{text}\n\nJSON:"
+)
+
+
+def _llm_extract_knowledge(text: str, existing_queue: List[dict],
+                           source: str = "per-turn") -> List[dict]:
+    """Use local LLM (qwen3:1.7b) to extract knowledge from assistant text.
+
+    Args:
+        text: Assistant response text
+        existing_queue: Already queued knowledge items (for dedup)
+        source: "per-turn" or "session-end" (affects limits and timeout)
+
+    Returns:
+        List of knowledge items: [{content, classification, knowledge_type, source, at}]
+    """
+    if not text or len(text) < 50:
+        return []
+
+    # Source-dependent limits
+    if source == "per-turn":
+        max_chars = 3000
+        max_items = 2
+        timeout = 3
+    else:  # session-end
+        max_chars = 4000
+        max_items = 5
+        timeout = 10
+
+    truncated = text[:max_chars]
+    prompt = _EXTRACT_PROMPT_TEMPLATE.format(text=truncated)
+
+    raw = _call_ollama_generate(prompt, timeout=timeout)
+    if not raw:
+        return []
+
+    # Parse JSON (with fallback)
+    items = []
+    try:
+        # Try to find JSON array in response
+        match = re.search(r"\[.*\]", raw, re.DOTALL)
+        if match:
+            items = json.loads(match.group(0))
+    except (json.JSONDecodeError, ValueError):
+        # Regex fallback: try to extract content/type pairs
+        for m in re.finditer(r'"content"\s*:\s*"([^"]{10,80})"', raw):
+            items.append({"content": m.group(1), "type": "factual"})
+
+    if not items:
+        return []
+
+    # Dedup against existing queue
+    existing_fingerprints = {
+        q.get("content", "")[:40].lower() for q in existing_queue
+    }
+
+    results = []
+    now = _now_iso()
+    for item in items[:max_items]:
+        content = item.get("content", "").strip()
+        if not content or len(content) < 10:
+            continue
+        # Skip if too similar to existing
+        if content[:40].lower() in existing_fingerprints:
+            continue
+        knowledge_type = item.get("type", "factual")
+        if knowledge_type not in ("factual", "procedural", "architectural", "pitfall"):
+            knowledge_type = "factual"
+        results.append({
+            "content": content[:80],
+            "classification": "[臨]",
+            "knowledge_type": knowledge_type,
+            "source": source,
+            "at": now,
+        })
+        existing_fingerprints.add(content[:40].lower())
+
+    return results
+
+
+def _async_extract_last_response(session_id: str, cwd: str, config: dict) -> None:
+    """Background thread: extract knowledge from last assistant response → write to state."""
+    try:
+        transcript = _find_session_transcript(session_id, cwd)
+        if not transcript:
+            return
+
+        rc = config.get("response_capture", {})
+        max_chars = rc.get("per_turn_max_chars", 3000)
+        min_chars = rc.get("per_turn_min_response_chars", 100)
+
+        text = _extract_last_assistant_text(transcript, max_chars=max_chars)
+        if not text or len(text) < min_chars:
+            return
+
+        state = read_state(session_id)
+        if not state:
+            return
+        existing = state.get("knowledge_queue", [])
+        items = _llm_extract_knowledge(text, existing, source="per-turn")
+        if items:
+            # Re-read state for freshness (avoid race condition)
+            state = read_state(session_id)
+            if not state:
+                return
+            state["pending_extraction"] = items
+            write_state(session_id, state)
+            print(f"[v2.4] Per-turn extraction: {len(items)} items", file=sys.stderr)
+    except Exception as e:
+        print(f"[v2.4] Per-turn extraction error: {e}", file=sys.stderr)
+
+
+# ─── End V2.4 ─────────────────────────────────────────────────────────────
 
 
 def _build_episodic_summary(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -1361,6 +1613,35 @@ def handle_session_end(input_data: Dict[str, Any], config: Dict[str, Any]) -> No
 
     state["ended_at"] = _now_iso()
     state["phase"] = "done"
+
+    # ─── V2.4: Collect any pending per-turn extraction ──────────────
+    pending = state.pop("pending_extraction", [])
+    if pending:
+        state.setdefault("knowledge_queue", []).extend(pending)
+
+    # ─── V2.4: SessionEnd transcript extraction (补漏) ────────────────
+    rc = config.get("response_capture", {})
+    if rc.get("enabled", True):
+        try:
+            cwd = state.get("session", {}).get("cwd", "")
+            transcript = _find_session_transcript(session_id, cwd)
+            if transcript:
+                se_max = rc.get("session_end_max_chars", 20000)
+                texts = _extract_all_assistant_texts(transcript, max_chars=se_max)
+                if texts:
+                    combined = "\n---\n".join(texts)
+                    existing = state.get("knowledge_queue", [])
+                    new_items = _llm_extract_knowledge(
+                        combined, existing, source="session-end"
+                    )
+                    if new_items:
+                        state.setdefault("knowledge_queue", []).extend(new_items)
+                        print(
+                            f"[v2.4] SessionEnd extraction: {len(new_items)} items",
+                            file=sys.stderr,
+                        )
+        except Exception as e:
+            print(f"[v2.4] SessionEnd extraction error: {e}", file=sys.stderr)
 
     mod_count = len(state.get("modified_files", []))
     kq_count = len(state.get("knowledge_queue", []))

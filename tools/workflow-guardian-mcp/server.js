@@ -324,6 +324,24 @@ const TOOL_DEFINITIONS = [
           type: "string",
           description: "What triggered this knowledge discovery",
         },
+        // V2.4: Two-layer classification
+        scope: {
+          type: "string",
+          enum: ["global", "project"],
+          description: "Knowledge scope: global (cross-project) or project-specific",
+          default: "project",
+        },
+        knowledge_type: {
+          type: "string",
+          enum: ["factual", "procedural", "architectural", "pitfall"],
+          description: "Knowledge type: factual (facts/values), procedural (steps/SOP), architectural (design/patterns), pitfall (bugs/traps)",
+          default: "factual",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional tags for sub-classification",
+        },
       },
       required: ["session_id", "content", "classification"],
     },
@@ -444,7 +462,8 @@ function toolWorkflowSignal(id, args) {
 }
 
 function toolMemoryQueueAdd(id, args) {
-  const { session_id, content, classification, trigger_context } = args;
+  const { session_id, content, classification, trigger_context,
+          scope, knowledge_type, tags } = args;
   const resolved = resolveSessionId(session_id);
   if (!resolved) {
     return sendToolResult(id, `No state found for session ${session_id}`, true);
@@ -454,13 +473,21 @@ function toolMemoryQueueAdd(id, args) {
     return sendToolResult(id, `No state found for session ${session_id}`, true);
   }
 
-  state.knowledge_queue = state.knowledge_queue || [];
-  state.knowledge_queue.push({
+  const item = {
     content,
     classification: classification || "[臨]",
     context: trigger_context || "",
     at: new Date().toISOString(),
-  });
+    // V2.4: Two-layer classification
+    scope: scope || "project",
+    knowledge_type: knowledge_type || "factual",
+  };
+  if (tags && Array.isArray(tags) && tags.length > 0) {
+    item.tags = tags;
+  }
+
+  state.knowledge_queue = state.knowledge_queue || [];
+  state.knowledge_queue.push(item);
   state.sync_pending = true;
   writeState(resolved, state);
 
