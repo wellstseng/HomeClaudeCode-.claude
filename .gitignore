@@ -51,6 +51,16 @@ projects/*/*/
 # ─── Node.js runtimes (portable, not tracked) ────────────
 tools/node22/
 
+# ─── Vector DB eval/audit logs (local diagnostics) ──────
+memory/_vectordb/audit.log
+memory/_vectordb/eval-results-*.json
+
+# ─── Playwright MCP (browser automation cache) ──────────
+.playwright-mcp/
+
+# ─── Dashboard screenshots (local artifacts) ────────────
+dashboard-*.png
+
 # ─── Python cache ────────────────────────────────────────
 __pycache__/
 *.pyc
