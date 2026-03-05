@@ -1378,6 +1378,131 @@ def _async_extract_last_response(session_id: str, cwd: str, config: dict) -> Non
         print(f"[v2.4] Per-turn extraction error: {e}", file=sys.stderr)
 
 
+# ─── V2.4 Phase 3: Cross-Session Pattern Consolidation ────────────────────
+
+
+def _check_cross_session_patterns(
+    knowledge_items: List[dict], session_id: str, config: Dict[str, Any]
+) -> List[dict]:
+    """Check if knowledge items appeared in past sessions via vector search.
+
+    For each item, query vector service top-3 (min_score: 0.75).
+    Count distinct sessions that mention similar knowledge.
+    - 2+ sessions → auto-promote [臨] → [觀]
+    - 4+ sessions → mark suggestion to promote [觀] → [固] (not auto)
+
+    Returns list of cross-session observation dicts for episodic atom.
+    Also mutates knowledge_items in-place (classification upgrade).
+    """
+    vs_config = config.get("vector_search", {})
+    if not vs_config.get("enabled", True):
+        return []
+
+    port = vs_config.get("service_port", 3849)
+    cross_session_config = config.get("cross_session", {})
+    min_score = cross_session_config.get("min_score", 0.75)
+    promote_threshold = cross_session_config.get("promote_threshold", 2)
+    suggest_threshold = cross_session_config.get("suggest_threshold", 4)
+    timeout_s = cross_session_config.get("timeout_seconds", 5)
+
+    observations: List[dict] = []
+    current_session_prefix = session_id[:8] if session_id else ""
+
+    for item in knowledge_items:
+        content = item.get("content", "")
+        if not content or len(content) < 20:
+            continue
+
+        # Query vector search for similar knowledge
+        try:
+            import urllib.parse
+            params = urllib.parse.urlencode({
+                "q": content[:200],
+                "top_k": 5,
+                "min_score": min_score,
+            })
+            url = f"http://127.0.0.1:{port}/search/ranked?{params}"
+            req = urllib.request.Request(url, headers={"Accept": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                    results = json.loads(resp.read())
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    # Fallback to basic /search
+                    params = urllib.parse.urlencode({
+                        "q": content[:200], "top_k": 5, "min_score": min_score,
+                    })
+                    url = f"http://127.0.0.1:{port}/search?{params}"
+                    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+                    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                        results = json.loads(resp.read())
+                else:
+                    continue
+
+            # Count distinct sessions from results (episodic atoms encode session info)
+            session_hits = set()
+            for r in results:
+                atom_name = r.get("atom_name", "")
+                file_path = r.get("file_path", "")
+                # Episodic atoms: "episodic-YYYYMMDD-slug" → each is a different session
+                if "episodic" in atom_name.lower():
+                    # Exclude current session's atom (prefix match)
+                    if current_session_prefix and current_session_prefix in atom_name:
+                        continue
+                    session_hits.add(atom_name)
+                else:
+                    # Non-episodic atoms: check if they contain session references
+                    # Count as 1 additional session reference if content matches
+                    atom_text = r.get("text", r.get("content", ""))
+                    if atom_text:
+                        session_hits.add(f"atom:{atom_name}")
+
+            hit_count = len(session_hits)
+            if hit_count < promote_threshold:
+                continue
+
+            current_class = item.get("classification", "[臨]")
+            new_class = current_class
+            action = ""
+
+            if hit_count >= suggest_threshold and current_class in ("[觀]", "[臨]"):
+                # 4+ sessions: suggest [觀] → [固] (don't auto-execute)
+                if current_class == "[臨]":
+                    item["classification"] = "[觀]"
+                    new_class = "[觀]"
+                action = f"建議晉升 → [固]（{hit_count} sessions 命中，需使用者確認）"
+            elif hit_count >= promote_threshold and current_class == "[臨]":
+                # 2+ sessions: auto-promote [臨] → [觀]
+                item["classification"] = "[觀]"
+                new_class = "[觀]"
+                action = f"自動晉升 [臨] → [觀]（{hit_count} sessions 命中）"
+
+            if action:
+                observations.append({
+                    "content": content[:80],
+                    "classification": new_class,
+                    "sessions_hit": hit_count,
+                    "action": action,
+                    "matched_atoms": list(session_hits)[:5],
+                })
+                # Annotate the item's trigger_context
+                prev_ctx = item.get("trigger_context", "")
+                item["trigger_context"] = (
+                    f"{prev_ctx} | cross-session: {hit_count} hits, {action}"
+                ).strip(" | ")
+
+                print(
+                    f"[v2.4] Cross-session: \"{content[:40]}...\" → {action}",
+                    file=sys.stderr,
+                )
+
+        except Exception as e:
+            print(f"[v2.4] Cross-session check error: {e}", file=sys.stderr)
+            continue
+
+    return observations
+
+
 # ─── End V2.4 ─────────────────────────────────────────────────────────────
 
 
@@ -1502,6 +1627,23 @@ def _update_memory_index(memory_dir: Path, atom_name: str, triggers: list) -> No
     index_path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _build_cross_session_section(state: Dict[str, Any]) -> str:
+    """Build '## 跨 Session 觀察' section from cross-session observations."""
+    obs = state.get("cross_session_observations", [])
+    if not obs:
+        return ""
+    lines = ["## 跨 Session 觀察\n"]
+    for o in obs:
+        cls = o.get("classification", "[觀]")
+        content = o.get("content", "")
+        action = o.get("action", "")
+        hits = o.get("sessions_hit", 0)
+        lines.append(f"- [{cls.strip('[]')}] \"{content}\" — {hits} sessions 出現，{action}")
+    lines.append("")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _generate_episodic_atom(
     session_id: str, state: Dict[str, Any], config: Dict[str, Any]
 ) -> Optional[str]:
@@ -1585,6 +1727,7 @@ def _generate_episodic_atom(
         + f"\n"
         f"\n"
         + (f"## 關聯\n\n" + "\n".join(relation_lines) + "\n\n" if relation_lines else "")
+        + _build_cross_session_section(state)
         + f"## 行動\n"
         f"\n"
         f"- session 自動摘要，TTL 24d 後自動淘汰\n"
@@ -1642,6 +1785,21 @@ def handle_session_end(input_data: Dict[str, Any], config: Dict[str, Any]) -> No
                         )
         except Exception as e:
             print(f"[v2.4] SessionEnd extraction error: {e}", file=sys.stderr)
+
+    # ─── V2.4 Phase 3: Cross-session pattern consolidation ──────────
+    cross_obs = []
+    kq = state.get("knowledge_queue", [])
+    if kq and config.get("vector_search", {}).get("enabled", True):
+        try:
+            cross_obs = _check_cross_session_patterns(kq, session_id, config)
+            if cross_obs:
+                state["cross_session_observations"] = cross_obs
+                print(
+                    f"[v2.4] Cross-session: {len(cross_obs)} patterns detected",
+                    file=sys.stderr,
+                )
+        except Exception as e:
+            print(f"[v2.4] Cross-session check error: {e}", file=sys.stderr)
 
     mod_count = len(state.get("modified_files", []))
     kq_count = len(state.get("knowledge_queue", []))
