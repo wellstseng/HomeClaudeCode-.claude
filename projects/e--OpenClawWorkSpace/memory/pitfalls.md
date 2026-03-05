@@ -48,6 +48,8 @@
 | user-level plugin entries 列已移除的 plugin → 載入異常 | 2026.3.2 移除了 `discord-reader`/`computer-use`/`claude-bridge`，user-level 殘留 entries 需清理 |
 | Heartbeat nagging loop: 相同警報 30+ 次重複無法自動解決 | 需加入 auto-resolution 或 N 次後靜音機制。目前只能人工介入 |
 | Weekly identity report cron 失敗 | 需要建立 `atoms/persons/_registry.md` 等基礎路徑（已有但格式/內容不足） |
+| Phase 4 session 提取：JSON 欄位名稱不一致 | session JSON 的 peer/identity 欄位命名隨版本變動，提取時需容錯處理多種 key 名 |
+| Phase 4 persons owner/user 分類混淆 | holylight 是 owner 不是 user；分層結構需在 `_registry.md` 明確標註角色 |
 | LINE 無法回傳圖片 | LINE channel 可收圖但無法主動發送圖片/截圖給使用者 |
 | Google Maps goo.gl 短網址無法解析 | OpenClaw 無法展開 Google Maps 短網址取得實際地址 |
 | 工作空間沙箱限制 (`workspaceOnly`) | 無法寫入 `平台工作空間\`，需調整 `fs.workspaceOnly` 設定或使用 workspace 內路徑 |

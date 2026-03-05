@@ -56,6 +56,14 @@
 - per-peer + identityLinks（Discord/LINE 共用 session）
 - `tools.sessions.visibility: "agent"`
 
+### Gateway Session 提取（Phase 4）
+- 從 7 個 Gateway session JSON 提取人事時地物，寫入 `.openclaw/workspace/atoms/`
+- persons 分 owner/user 兩層：holylight 為 owner（含 context/interests/personality/principles/relationships 子目錄），luway/wellstseng/wendy 為 user（僅 `_profile.md`）
+- events 獨立 atom：tesla-delivery、multi-ai-consensus、atomic-memory-v211-discussion、discord-output-policy
+- `_registry.md` 作為 persons 映射索引
+- session-profiles/ 保留原始 JSON（7 個）供未來回溯
+- CC atoms（本檔 + pitfalls）同步記錄提取過程中的決策與坑點
+
 ### Gateway
 - Scheduled Task 服務，`openclaw gateway install/start/stop`
 

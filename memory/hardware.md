@@ -4,7 +4,7 @@
 - Confidence: [觀]
 - Trigger: 硬體, 電腦, 升級, hardware, PC, GPU, CPU, 顯卡, 記憶體, RAM, 主機板
 - Last-used: 2026-03-05
-- Confirmations: 1
+- Confirmations: 2
 - Type: context
 
 ## 知識
