@@ -95,18 +95,23 @@ def discover_atoms(
         layer_skip_files = extra_skip.get(layer_name, set())
         is_extra = layer_name.startswith("extra:")
 
-        # Extra layers support recursive scanning
-        glob_pattern = "**/*.md" if is_extra else "*.md"
-        for md_file in sorted(mem_dir.glob(glob_pattern)):
-            if md_file.name in SKIP_FILENAMES:
-                continue
-            if any(md_file.name.startswith(p) for p in SKIP_PREFIXES):
-                continue
-            # Per-source skip_files (match stem)
-            if md_file.stem in layer_skip_files:
-                continue
-            rel = str(md_file.relative_to(mem_dir))
-            atoms.append((layer_name, md_file, rel))
+        # Extra layers support recursive scanning; standard layers scan root + episodic/
+        glob_patterns = ["**/*.md"] if is_extra else ["*.md", "episodic/*.md"]
+        seen_paths: set = set()
+        for glob_pattern in glob_patterns:
+            for md_file in sorted(mem_dir.glob(glob_pattern)):
+                if md_file in seen_paths:
+                    continue
+                seen_paths.add(md_file)
+                if md_file.name in SKIP_FILENAMES:
+                    continue
+                if any(md_file.name.startswith(p) for p in SKIP_PREFIXES):
+                    continue
+                # Per-source skip_files (match stem)
+                if md_file.stem in layer_skip_files:
+                    continue
+                rel = str(md_file.relative_to(mem_dir))
+                atoms.append((layer_name, md_file, rel))
 
         # _distant/ 遙遠記憶 (standard layers only)
         if include_distant and not is_extra:

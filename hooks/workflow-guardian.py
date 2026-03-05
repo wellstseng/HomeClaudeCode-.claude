@@ -1645,12 +1645,27 @@ def _build_cross_session_section(state: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _resolve_episodic_dir(state: Dict[str, Any]) -> Tuple[Path, str]:
+    """Resolve episodic directory: project-scoped if CWD maps to a project, else global.
+
+    Returns (episodic_dir, scope_label).
+    """
+    cwd = state.get("session", {}).get("cwd", "")
+    if cwd:
+        project_mem = get_project_memory_dir(cwd)
+        if project_mem:
+            slug = cwd_to_project_slug(cwd)
+            return project_mem / "episodic", f"project:{slug}"
+    return EPISODIC_DIR, "global"
+
+
 def _generate_episodic_atom(
     session_id: str, state: Dict[str, Any], config: Dict[str, Any]
 ) -> Optional[str]:
     """Auto-generate an episodic atom summarizing this session.
 
     Returns the filename of the generated atom, or None if skipped.
+    Project-scoped: if CWD maps to a known project, episodic goes to project layer.
     """
     if not _should_generate_episodic(state, config):
         return None
@@ -1664,8 +1679,9 @@ def _generate_episodic_atom(
     expires = (datetime.now() + timedelta(days=24)).strftime("%Y-%m-%d")
     triggers = _generate_triggers(state, summary["work_areas"])
 
-    EPISODIC_DIR.mkdir(parents=True, exist_ok=True)
-    atom_path = _resolve_episodic_filename(EPISODIC_DIR, date_compact, slug)
+    episodic_dir, scope_label = _resolve_episodic_dir(state)
+    episodic_dir.mkdir(parents=True, exist_ok=True)
+    atom_path = _resolve_episodic_filename(episodic_dir, date_compact, slug)
     atom_name = atom_path.stem
 
     # Build knowledge lines
@@ -1709,7 +1725,7 @@ def _generate_episodic_atom(
     content = (
         f"# Session: {today} {summary['primary_area']}\n"
         f"\n"
-        f"- Scope: global\n"
+        f"- Scope: {scope_label}\n"
         f"- Confidence: [臨]\n"
         f"- Type: episodic\n"
         f"- Trigger: {', '.join(triggers)}\n"
@@ -1745,7 +1761,7 @@ def _generate_episodic_atom(
     atom_path.write_text(content, encoding="utf-8")
     # v2.2: Episodic atoms NOT listed in MEMORY.md index (TTL 24d, vector search discovers them)
 
-    print(f"[episodic] Generated: {atom_path.name}", file=sys.stderr)
+    print(f"[episodic] Generated: {atom_path.name} (scope: {scope_label})", file=sys.stderr)
     return atom_name
 
 
