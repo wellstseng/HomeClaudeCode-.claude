@@ -98,12 +98,19 @@ def _extract_last_assistant_text(transcript_path: Path, max_chars: int = 3000) -
 
 _EXTRACT_PROMPT = (
     "Extract reusable technical knowledge from this AI assistant response. "
-    "Output a JSON array of objects, each with 'content' (max 80 chars, concise fact) "
-    "and 'type' (one of: factual, procedural, architectural, pitfall). "
-    "Only extract: root causes, API behaviors, architecture constraints, "
-    "debugging patterns, configuration values, environment-specific behaviors. "
-    "Skip: code changes, general programming knowledge, session-specific details, greetings. "
-    "If nothing worth extracting, output empty array [].\n\n"
+    "Output a JSON array of objects with 'content' (max 150 chars) and "
+    "'type' (factual|procedural|architectural|pitfall|decision|preference).\n\n"
+    "ONLY extract knowledge that is:\n"
+    "- Actionable: tells you WHAT to do or avoid in a specific situation\n"
+    "- Specific: contains concrete values, paths, versions, or error patterns\n"
+    "- Reusable: will be useful in future sessions, not just this one\n\n"
+    "DO NOT extract:\n"
+    "- General programming knowledge (e.g. 'Python uses virtual environments')\n"
+    "- Obvious facts (e.g. 'files need to be saved before running')\n"
+    "- Session-specific details (e.g. 'we fixed 3 files today')\n"
+    "- Code snippets or implementation details\n"
+    "- Greetings or conversational text\n\n"
+    "If nothing worth extracting, output [].\n\n"
     "Response text:\n{text}\n\nJSON:"
 )
 
@@ -113,6 +120,7 @@ def _call_ollama(prompt: str, model: str = "qwen3:1.7b", timeout: int = 120) -> 
         "model": model,
         "prompt": prompt,
         "stream": False,
+        "format": "json",
         "options": {"temperature": 0.1, "num_predict": 2048}
     }).encode("utf-8")
     req = urllib.request.Request(
@@ -166,26 +174,26 @@ def extract(session_id: str, cwd: str, config: dict) -> None:
         return
 
     # Dedup + validate
-    existing_fps = {q.get("content", "")[:40].lower() for q in existing}
+    existing_fps = {q.get("content", "")[:60].lower() for q in existing}
     results = []
     now = _now_iso()
     for item in items[:max_items]:
         content = item.get("content", "").strip()
         if not content or len(content) < 10:
             continue
-        if content[:40].lower() in existing_fps:
+        if content[:60].lower() in existing_fps:
             continue
         kt = item.get("type", "factual")
-        if kt not in ("factual", "procedural", "architectural", "pitfall"):
+        if kt not in ("factual", "procedural", "architectural", "pitfall", "decision", "preference"):
             kt = "factual"
         results.append({
-            "content": content[:80],
+            "content": content[:150],
             "classification": "[臨]",
             "knowledge_type": kt,
             "source": "per-turn",
             "at": now,
         })
-        existing_fps.add(content[:40].lower())
+        existing_fps.add(content[:60].lower())
 
     if results:
         # Re-read state for freshness

@@ -1254,6 +1254,7 @@ def _call_ollama_generate(prompt: str, model: str = "qwen3:1.7b",
         "model": model,
         "prompt": prompt,
         "stream": False,
+        "format": "json",
         "options": {"temperature": 0.1, "num_predict": 2048}
     }).encode("utf-8")
 
