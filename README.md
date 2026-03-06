@@ -120,20 +120,20 @@ sequenceDiagram
     participant F as 檔案系統
 
     U->>C: 輸入 prompt
-    C->>F: 讀取 CLAUDE.md (若有 system prompt)
-    F-->>C:
+    C->>F: 讀取 CLAUDE.md
+    F-->>C: system prompt
 
-    note right of C: 生成回應<br/>• 無歷史知識<br/>• 無使用者偏好<br/>• 無過去決策
+    note right of C: 生成回應<br>無歷史知識<br>無使用者偏好<br>無過去決策
 
-    C->>F: 使用工具 (Read/Edit/Write/Bash)
-    F-->>C:
+    C->>F: 使用工具 Read/Edit/Write/Bash
+    F-->>C: 結果
     C-->>U: 回應結果
 
     U->>C: Session 結束
 
-    note right of C: ❌ 所有 context 消失<br/>❌ 知識歸零<br/>❌ 下次重頭來過
+    note right of C: [X] 所有 context 消失<br>[X] 知識歸零<br>[X] 下次重頭來過
 
-    note over U,F: 沒有 hooks、沒有記憶注入、沒有同步閘門<br/>每個 session 都是全新的白紙
+    note over U,F: 沒有 hooks 沒有記憶注入 沒有同步閘門<br>每個 session 都是全新的白紙
 ```
 
 ### Claude Code + 原子記憶 V2.5 完整流程
@@ -149,95 +149,95 @@ sequenceDiagram
 
     U->>G: 啟動 Session
 
-    rect rgba(100, 150, 255, 0.1)
+    rect rgba(100,150,255,0.1)
         note over G,F: SessionStart Hook
         G->>G: [1] 建立 session state file
-        G->>G: [2] 解析 MEMORY.md 索引 (全域+專案)
+        G->>G: [2] 解析 MEMORY.md 索引
         G->>V: [3] 檢查 Vector Service health
-        V-->>G:
-        note right of G: 若未啟動: 自動 spawn service
-        G->>C: [4] 注入: atom 索引清單 + Guardian 狀態
+        V-->>G: status
+        note right of G: 若未啟動則自動 spawn service
+        G->>C: [4] 注入 atom 索引清單 + Guardian 狀態
     end
 
     U->>G: 輸入 prompt
 
-    rect rgba(100, 200, 100, 0.1)
+    rect rgba(100,200,100,0.1)
         note over G,F: UserPromptSubmit Hook
-        note over G,V: Phase 0 (首次 prompt)
+        note over G,V: Phase 0 首次 prompt
         G->>V: [A] Episodic context search
         V->>O: embed
-        O-->>V:
-        V-->>G: ~1.5s
+        O-->>V: vector
+        V-->>G: results ~1.5s
         G->>G: [B] 注入過去 session 摘要
 
-        note over G,V: Phase 1 — Atom 自動注入
-        G->>G: [C] Keyword trigger 匹配 (~10ms)
-        G->>G: [D] Intent 分類 (rule-based ~1ms)
+        note over G,V: Phase 1 Atom 自動注入
+        G->>G: [C] Keyword trigger 匹配 ~10ms
+        G->>G: [D] Intent 分類 rule-based ~1ms
         G->>V: [E] Semantic search
         V->>O: embed
-        O-->>V:
-        V-->>G: ~200-500ms
+        O-->>V: vector
+        V-->>G: results ~200-500ms
         G->>G: [F] Merge keyword + semantic 結果
         G->>G: [G] Supersedes 過濾
-        G->>F: [H] 載入 atoms (token budget 內)
+        G->>F: [H] 載入 atoms token budget 內
         F-->>G: atoms
         G->>G: [I] Related atom 自動載入
         G->>G: [J] Auto-update Last-used + Confirm++
-        G->>G: [K] Auto-promote [臨]→[觀]
+        G->>G: [K] Auto-promote 臨 to 觀
 
-        note over G,V: Phase 2 — 同步提醒
+        note over G,V: Phase 2 同步提醒
         G->>G: [L] 檢查未同步修改
 
-        G->>C: additionalContext: atoms + reminders
+        G->>C: additionalContext atoms + reminders
 
-        note over G,O: V2.5 — 回應知識捕獲 (非同步, format:json)
-        G->>O: [L2] 上一輪 assistant 回應 → qwen3 萃取 (可操作性標準)
-        O-->>G: → state["pending_extraction"]
+        note over G,O: V2.5 回應知識捕獲 非同步
+        G->>O: [L2] 上一輪回應 qwen3 萃取
+        O-->>G: state pending_extraction
     end
 
-    C->>F: 使用工具 (Read/Edit/Write/Bash)
-    F-->>C:
+    C->>F: 使用工具 Read/Edit/Write/Bash
+    F-->>C: 結果
 
-    rect rgba(255, 200, 100, 0.1)
-        note over G,F: PostToolUse Hook (Edit/Write only)
+    rect rgba(255,200,100,0.1)
+        note over G,F: PostToolUse Hook Edit/Write only
         G->>G: [M] 記錄 modified file 到 state
         G->>G: [N] sync_pending = true
-        G->>V: [O] 若修改 atom → incremental index
+        G->>V: [O] 若修改 atom 則 incremental index
     end
 
-    note over C: (繼續多輪...)
+    note over C: 繼續多輪...
 
-    rect rgba(200, 200, 200, 0.1)
-        note over G,F: PreCompact Hook (context 壓縮前)
-        G->>G: [P] 快照 state (壓縮前保護)
+    rect rgba(200,200,200,0.1)
+        note over G,F: PreCompact Hook context 壓縮前
+        G->>G: [P] 快照 state 壓縮前保護
     end
 
     U->>G: Session 結束意圖
 
-    rect rgba(255, 150, 150, 0.1)
-        note over G,F: Stop Hook (閘門)
-        alt 有未同步 + blocked < 2 次
-            G--xC: BLOCK: "X files modified" → 被迫繼續同步
-        else blocked ≥ 2 次
-            note right of G: 強制放行 (防無限迴圈)
-        else 已同步 / 無待同步
+    rect rgba(255,150,150,0.1)
+        note over G,F: Stop Hook 閘門
+        alt 有未同步且 blocked 未滿 2 次
+            G--xC: BLOCK 要求繼續同步
+        else blocked 已達 2 次
+            note right of G: 強制放行 防無限迴圈
+        else 已同步或無待同步
             note right of G: 放行
         end
     end
 
-    rect rgba(150, 100, 255, 0.1)
+    rect rgba(150,100,255,0.1)
         note over G,F: SessionEnd Hook
-        G->>O: [Q] Transcript 全文掃描 → qwen3 萃取
+        G->>O: [Q] Transcript 全文掃描 qwen3 萃取
         O-->>G: knowledge_queue
-        G->>V: [R] 跨 Session 鞏固 — 逐項向量搜尋
-        V-->>G:
-        note right of G: 2+ sessions → 自動晉升 [臨]→[觀]<br/>4+ sessions → 建議晉升 [觀]→[固]
+        G->>V: [R] 跨 Session 鞏固 逐項向量搜尋
+        V-->>G: matches
+        note right of G: 2+ sessions 自動晉升<br>4+ sessions 建議晉升
         G->>G: [S] 自動生成 episodic atom
-        G->>V: [T] incremental index (若有 atom 變動)
-        G->>G: [U] 寫入 state phase="done"
+        G->>V: [T] incremental index
+        G->>G: [U] 寫入 state phase done
     end
 
-    note over U,F: ✅ 知識已保存到 atoms + vector DB<br/>✅ 回應知識自動萃取 (V2.5: 可操作性標準)<br/>✅ 跨 session 重複知識自動晉升<br/>✅ 下次 session 自動載入
+    note over U,F: 知識已保存到 atoms + vector DB<br>回應知識自動萃取 V2.5<br>跨 session 重複知識自動晉升<br>下次 session 自動載入
 ```
 
 ---
