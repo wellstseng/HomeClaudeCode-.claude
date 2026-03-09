@@ -8,6 +8,7 @@
 | decisions | memory/decisions.md | 全域決策, 工具, 工作流, workflow, guardian, hooks, MCP |
 | spec | memory/SPEC_Atomic_Memory_System.md | 原子記憶規格, atom schema, 記憶系統設計 |
 | hardware | memory/hardware.md | 硬體, 電腦, 升級, hardware, PC, GPU, CPU, 顯卡, 記憶體, RAM, 主機板 |
+| self-iteration-theory | memory/openclaw-self-iteration.md | 自我迭代, self-iteration, 演進原則, 理論背書, 設計哲學 |
 
 ---
 

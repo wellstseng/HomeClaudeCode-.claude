@@ -3,8 +3,8 @@
 - Scope: global
 - Confidence: [固]
 - Trigger: 全域決策, 工具, 工作流, workflow, guardian, hooks, MCP, 記憶系統
-- Last-used: 2026-03-09
-- Confirmations: 53
+- Last-used: 2026-03-10
+- Confirmations: 54
 - Type: decision
 
 ## 知識
@@ -97,3 +97,4 @@
 - 2026-03-09: [固] 主動續航（Session Continuity）— 段落完成即存、Token 上限預警存檔、重試追蹤、執行中項目清單、跨 Session 接續
 - 2026-03-09: [固] 三級注入策略（Level 0/1/2）+ 人性化 Trigger + 工作單元命名 + 自我迭代原則
 - 2026-03-09: [固] 定期檢閱週期（每 5±2 session）— 近期 session 回顧、重複模式收攏晉升、向量庫同步
+- 2026-03-10: [固] 自我迭代理論背書 — 8 條原則 × 五大領域跨學科理論（Skinner/Kolmogorov/Popper/Taleb/Dreyfus/Aristotle/Rawls/Russell 等）
