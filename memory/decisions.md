@@ -4,7 +4,7 @@
 - Confidence: [固]
 - Trigger: 全域決策, 工具, 工作流, workflow, guardian, hooks, MCP, 記憶系統
 - Last-used: 2026-03-10
-- Confirmations: 57
+- Confirmations: 58
 - Type: decision
 
 ## 知識
@@ -76,6 +76,12 @@
   - State schema 1.2: 新增 `iteration_metrics` 欄位
 - [固] **定期檢閱流程**：hook 觸發提醒 → Claude 掃描 episodic + knowledge_queue → 收攏/晉升規則 → 寫入 `workflow/last_review_marker.json` 重置計數器
 
+### 記憶強化（V2.7）
+- [觀] **failures.md**：失敗模式記憶（環境踩坑/假設錯誤/模式誤用/生成品質回饋），procedural type，45 天淘汰
+- [觀] **toolchain.md**：工具鏈實戰記憶（Windows 差異/已驗證指令/路徑版本/特殊配置），procedural type
+- [觀] **Output Quality Feedback**：PostToolUse 的 `_check_output_quality()` 偵測跨 session 重寫檔案，結果寫入 `state["quality_feedback"]`，SessionEnd 自動記入 episodic 知識段落
+- [觀] **跨專案模式掃描**：定期檢閱時比較不同專案 episodic atoms，跨 2+ 專案共通模式收攏為全域知識
+
 ### 歷史決策
 - [固] 記憶檢索統一用 Python，已移除 Node.js memory-v2（2026-03-05 退役）
 - [固] Stop hook 只保留 Guardian 閘門，移除 Discord 通知
@@ -88,26 +94,12 @@
 - Guardian 閘門最多阻止 2 次，第 3 次強制放行
 - 大幅修改前 session 生成的程式碼（>30% 變動）時，記錄品質回饋到 failures.md「生成品質回饋」分類
 - debug 超過 5 分鐘時，先查 failures.md 已知模式再嘗試新方案
+- 定期檢閱時，比較不同專案的 episodic atoms，找出跨 2+ 專案的共通模式（程式風格、錯誤處理、架構偏好），收攏為全域 atom 知識
 
 ## 演化日誌
 
-- 2026-03-05: 建立 README.md（哲學/Token比較/流程圖/大型專案使用法）+ Install-forAI.md 安裝指南
-- 2026-03-05: V2.3 合併安裝，從公司版遷移核心工具鏈到家用電腦
-- 2026-03-05: LanceDB → ChromaDB（i7-3770 不支援 AVX2，LanceDB search crash）
-- 2026-03-05: embedding model 指定 qwen3-embedding:0.6b（避免 latest 4.7GB 版 timeout）
-- 2026-03-05: search_min_score 從 0.65 降至 0.45（0.6b 小模型 score 普遍較低）
-- 2026-03-05: OpenClaw atoms 整合（additional_atom_dirs），Node.js memory-v2 退役
-- 2026-03-05: V2.3 全面升級 OpenClaw Phase 1+2 完成 — MEMORY.md 3欄格式修正、root CLAUDE.md、4個大師級 atom
-- 2026-03-05: V2.4 Phase 1+2（回應捕獲）+ Phase 3（跨 Session 鞏固）上線
-- 2026-03-05: SessionEnd timeout 5→30s，修復 episodic atom 不生成 bug
-- 2026-03-05: episodic 移入 memory/episodic/（不進 git），hardware.md 從 git 移除
-- 2026-03-05: .gitignore 整理 — 只保留 OpenClaw project memory，排除 session-env/、.claude/
-- 2026-03-05: fix: workflow-guardian stdout/stderr 強制 UTF-8（Windows cp950 導致中文亂碼）
-- 2026-03-06: V2.5 Hybrid Search Keyword Boost（專有名詞召回率提升）+ Self-healing Collection Cache（ChromaDB 失效自動恢復）
-- 2026-03-09: [固] 主動續航（Session Continuity）— 段落完成即存、Token 上限預警存檔、重試追蹤、執行中項目清單、跨 Session 接續
-- 2026-03-09: [固] 三級注入策略（Level 0/1/2）+ 人性化 Trigger + 工作單元命名 + 自我迭代原則
-- 2026-03-09: [固] 定期檢閱週期（每 5±2 session）— 近期 session 回顧、重複模式收攏晉升、向量庫同步
-- 2026-03-10: [固] 自我迭代理論背書 — 8 條原則 × 五大領域跨學科理論（Skinner/Kolmogorov/Popper/Taleb/Dreyfus/Aristotle/Rawls/Russell 等）
-- 2026-03-10: [固] V2.6 Self-Iteration Engine 實作 — metrics 收集 + 震盪偵測 + 成熟度模型 + 定期檢閱觸發 + CLAUDE.md 行為指引 + SPEC v2.6
-- 2026-03-10: [觀] 新增 failures.md（失敗模式+品質回饋）+ toolchain.md（工具鏈實戰記憶）— 強化「從錯誤學習」和「環境知識累積」
-- 2026-03-10: [觀] V2.7 Output Quality Feedback — PostToolUse 偵測跨 session 重寫檔案 + episodic atom 品質訊號段落
+- 2026-03-05: V2.3 合併安裝 + V2.4 回應捕獲/跨 Session 鞏固 + ChromaDB 遷移 + OpenClaw 整合（12 項變更壓縮）
+- 2026-03-06: V2.5 Hybrid Search Keyword Boost + Self-healing Collection Cache
+- 2026-03-09: [固] 主動續航 + 三級注入 + 工作單元命名 + 定期檢閱
+- 2026-03-10: [固] V2.6 Self-Iteration Engine（8 條演進原則 + 跨學科理論背書 + metrics/震盪/成熟度/檢閱自動化）
+- 2026-03-10: [觀] V2.7 記憶強化 — failures.md + toolchain.md + Output Quality Feedback（PostToolUse 跨 session 偵測）+ 跨專案模式掃描
