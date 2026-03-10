@@ -64,6 +64,29 @@ function listStatePaths() {
 }
 
 function resolveSessionId(prefix) {
+  // "current" / "latest" → pick the most recently modified active session
+  if (prefix === "current" || prefix === "latest") {
+    const paths = listStatePaths();
+    if (paths.length === 0) return null;
+    // Sort by mtime descending, prefer non-ended sessions
+    const candidates = paths.map((p) => {
+      try {
+        const state = JSON.parse(fs.readFileSync(p, "utf-8"));
+        const sid = path.basename(p).replace("state-", "").replace(".json", "");
+        const phase = state.phase || "unknown";
+        const working = (phase === "working" || phase === "syncing");
+        return { sid, ended: !!state.ended_at, working, mtime: fs.statSync(p).mtimeMs };
+      } catch { return null; }
+    }).filter(Boolean);
+    // Priority: working > non-ended > ended, then most recent mtime
+    candidates.sort((a, b) => {
+      if (a.working !== b.working) return a.working ? -1 : 1;
+      if (a.ended !== b.ended) return a.ended ? 1 : -1;
+      return b.mtime - a.mtime;
+    });
+    return candidates.length > 0 ? candidates[0].sid : null;
+  }
+
   // Support prefix matching: "3c7a47d0" → full UUID
   // Direct hit: exact filename exists → fast path
   const directPath = path.join(WORKFLOW_DIR, `state-${prefix}.json`);
