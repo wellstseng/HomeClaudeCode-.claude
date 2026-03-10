@@ -3,8 +3,8 @@
 - Scope: global
 - Confidence: [固]
 - Trigger: 失敗, 錯誤, debug, 踩坑, pitfall, crash, 重試, retry, workaround
-- Last-used: 2026-03-10
-- Confirmations: 7
+- Last-used: 2026-03-11
+- Confirmations: 9
 - Type: procedural
 - Tags: failure, pitfall, debug, quality-feedback
 - Related: decisions, toolchain
@@ -18,6 +18,8 @@
 - [固] Windows bash 的 `find` 輸出路徑含反斜線 → 管道到其他工具時路徑解析失敗 → 改用 Glob/Grep 工具或 `//` 正斜線（根因: MSYS2 路徑轉換不一致）
 - [固] ChromaDB 在 i7-3770 上 import 失敗 → 誤以為安裝問題反覆重裝 → 確認 CPU 不支援 AVX2 後改用 SQLite backend（根因: LanceDB/ChromaDB 預設需要 AVX2 指令集）
 - [觀] Windows Node.js `rmSync()` 對 CJK 檔名靜默失敗（不報錯但不刪除）→ 以為刪除成功 → 改用 `unlinkSync()`（根因: rmSync 內部路徑處理與 NTFS CJK 字元不相容）
+- [臨] MCP `Ctrl+Shift+Escape` 被安全機制擋住（"dangerous key combination"）→ 改用 Command Palette 輸入指令名稱（根因: Ctrl+Shift+Escape 是 Windows Task Manager 快捷鍵，MCP 禁止觸發系統功能）
+- [臨] VS Code "Open in New Tab" 開 Claude Code 會與側邊欄 CHAT 面板搶焦點 → 點擊/貼上操作進入錯誤面板 → 改用 "Open in New Window" 獨立視窗（根因: 同視窗兩個 webview 輸入框座標重疊）
 
 ### 假設錯誤（Wrong Assumption）
 

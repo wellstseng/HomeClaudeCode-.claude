@@ -3,8 +3,8 @@
 - Scope: global
 - Confidence: [固]
 - Trigger: 全域決策, 工具, 工作流, workflow, guardian, hooks, MCP, 記憶系統
-- Last-used: 2026-03-10
-- Confirmations: 68
+- Last-used: 2026-03-11
+- Confirmations: 69
 - Type: decision
 
 ## 知識
@@ -97,7 +97,8 @@
 - [觀] 反思校準：需 10+ sessions 數據，目前 2 sessions（single_file 2/2），暫不調整權重
 - [觀] 因果圖 BFS dedup：warned_edges set 防止同一 edge 從不同起點重複匹配（Phase 3 修復）
 - [觀] Bayesian auto-update 設計完成但未啟用：等 10+ sessions 累積再開，避免小樣本錯誤衰減好 edge
-- [臨] 依賴：/resume Skill 也列入待建（Session 接續智慧化）
+- [觀] /resume Skill：自動續接 Session（收集狀態→生成 prompt→MCP 自動化開新視窗→貼上→執行）
+- [固] /resume 必須用 "Open in New Window"（不可用 "Open in New Tab"），避免側邊欄焦點衝突
 
 ### 歷史決策
 - [固] 記憶檢索統一用 Python，已移除 Node.js memory-v2（2026-03-05 退役）
@@ -123,3 +124,4 @@
 - 2026-03-10: [固] V2.7 CLAUDE.md 精簡 — 289→144 行（-50%），移除 hook 實作細節與重複偏好，保留 Claude 決策指令
 - 2026-03-10: [觀] V2.8 Phase 2 — 因果圖種子 3 edges + add_causal_edge() helper + guardian import 更新 + 反思校準待 10+ sessions
 - 2026-03-11: [觀] V2.8 Phase 3 — BFS dedup 修復 + 情境分類器閾值調校（2/6→4/10, cap=5）+ Bayesian auto-update 設計（未啟用）
+- 2026-03-11: [觀] /resume Skill 建立 — MCP 自動化續接（Open in New Window + clipboard + paste + enter）
