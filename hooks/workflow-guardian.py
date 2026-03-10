@@ -22,6 +22,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# ─── V2.8: Wisdom Engine (lazy import, graceful fallback) ────────────────────
+try:
+    from wisdom_engine import (
+        get_causal_warnings,
+        classify_situation,
+        get_reflection_summary,
+        reflect as wisdom_reflect,
+        track_retry as wisdom_track_retry,
+    )
+    WISDOM_AVAILABLE = True
+except ImportError:
+    WISDOM_AVAILABLE = False
+
 # ─── Constants ───────────────────────────────────────────────────────────────
 
 CLAUDE_DIR = Path.home() / ".claude"
@@ -691,6 +704,14 @@ def handle_session_start(input_data: Dict[str, Any], config: Dict[str, Any]) -> 
     except Exception as e:
         print(f"[v2.6] Review check error: {e}", file=sys.stderr)
 
+    # ── V2.8: Wisdom Engine — reflection blind spots ───────────────
+    if WISDOM_AVAILABLE:
+        try:
+            wisdom_lines = get_reflection_summary()
+            lines.extend(wisdom_lines)
+        except Exception as e:
+            print(f"[v2.8] Wisdom reflection error: {e}", file=sys.stderr)
+
     # ── Vector Service auto-start ──────────────────────────────────────
     if config.get("vector_search", {}).get("auto_start_service", True):
         _ensure_vector_service(config)
@@ -743,6 +764,27 @@ def handle_user_prompt_submit(
             # Proactive classification (cross-session patterns, migration hints)
             proactive_lines = _proactive_classify(state, episodic_results, prompt, config)
             lines.extend(proactive_lines)
+
+    # ─── V2.8: Wisdom Engine — causal warnings + situation ──────────
+    if WISDOM_AVAILABLE:
+        try:
+            # Causal warnings from recently modified files
+            mod_paths = [m["path"] for m in state.get("modified_files", [])]
+            if mod_paths:
+                causal = get_causal_warnings(mod_paths)
+                lines.extend(causal)
+            # Situation classifier (uses topic_tracker signals)
+            tracker = state.get("topic_tracker", {})
+            prompt_analysis = {
+                "intent": tracker.get("intent_distribution", {}).get("top", ""),
+                "keywords": tracker.get("keyword_signals", []),
+                "estimated_files": max(len(mod_paths), 1),
+            }
+            result = classify_situation(prompt_analysis)
+            if result.get("inject"):
+                lines.append(result["inject"])
+        except Exception as e:
+            print(f"[v2.8] Wisdom prompt error: {e}", file=sys.stderr)
 
     # ─── Phase 1: Atom auto-injection (Trigger matching) ─────────────
     atom_index = state.get("atom_index", {})
@@ -1022,6 +1064,13 @@ def handle_post_tool_use(input_data: Dict[str, Any], config: Dict[str, Any]) -> 
             "at": _now_iso(),
         })
         state["sync_pending"] = True
+
+        # V2.8: Wisdom Engine retry tracking
+        if WISDOM_AVAILABLE:
+            try:
+                wisdom_track_retry(state, file_path)
+            except Exception as e:
+                print(f"[v2.8] Wisdom retry track error: {e}", file=sys.stderr)
 
         # V2.7: Check if this file was modified in a previous session
         try:
@@ -2152,6 +2201,13 @@ def handle_session_end(input_data: Dict[str, Any], config: Dict[str, Any]) -> No
                 )
     except Exception as e:
         print(f"[v2.6] Self-iteration metrics error: {e}", file=sys.stderr)
+
+    # ─── V2.8: Wisdom Engine — session reflection ────────────────────
+    if WISDOM_AVAILABLE:
+        try:
+            wisdom_reflect(state)
+        except Exception as e:
+            print(f"[v2.8] Wisdom reflect error: {e}", file=sys.stderr)
 
     # v2.1 Task #2: Auto-generate episodic atom
     if config.get("episodic", {}).get("auto_generate", True):
