@@ -1,10 +1,10 @@
 # 工具鏈實戰記憶
 
 - Scope: global
-- Confidence: [觀]
+- Confidence: [固]
 - Trigger: 工具, 環境, 指令, command, path, 路徑, bash, git, python, npm, ollama
 - Last-used: 2026-03-10
-- Confirmations: 2
+- Confirmations: 4
 - Type: procedural
 - Tags: toolchain, environment, commands
 - Related: hardware
@@ -50,3 +50,4 @@
 | 日期 | 變更 | 來源 |
 |------|------|------|
 | 2026-03-10 | 初始建立：從 hardware.md + decisions.md 整理已知工具鏈知識，4 大分類 | manual |
+| 2026-03-10 | [觀]→[固] 定期檢閱晉升，Confirmations=4 | periodic-review |
