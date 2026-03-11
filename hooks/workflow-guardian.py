@@ -12,9 +12,11 @@ Requirements: Python 3.8+, zero external dependencies.
 """
 
 import json
+import math
 import os
 import sys
 import re
+import time
 import threading
 import urllib.request
 import urllib.error
@@ -63,6 +65,12 @@ DEFAULTS = {
         "reserved_tokens": 200,
         "min_score": 0.35,
         "search_timeout_ms": 1500,
+    },
+    # v2.10: _AIDocs Bridge
+    "aidocs": {
+        "enabled": True,
+        "max_session_start_entries": 15,
+        "max_prompt_matches": 3,
     },
     # v2.2 Sprint 2: Proactive classification
     "proactive": {
@@ -138,6 +146,8 @@ def new_state(session_id: str, cwd: str, source: str) -> Dict[str, Any]:
         },
         "phase": "init",
         "modified_files": [],
+        "accessed_files": [],
+        "vcs_queries": [],
         "knowledge_queue": [],
         "sync_pending": False,
         "stop_blocked_count": 0,
@@ -163,6 +173,7 @@ def new_state(session_id: str, cwd: str, source: str) -> Dict[str, Any]:
 # ─── Memory Index Parsing ────────────────────────────────────────────────────
 
 TABLE_ROW_RE = re.compile(r"^\|(.+)\|$")
+ALIAS_RE = re.compile(r"^>\s*Project-Aliases:\s*(.+)", re.MULTILINE)  # v2.9
 
 # Atom entry: (name, relative_path, trigger_keywords[])
 AtomEntry = Tuple[str, str, List[str]]
@@ -202,6 +213,86 @@ def parse_memory_index(memory_dir: Path) -> List[AtomEntry]:
     return atoms
 
 
+def parse_project_aliases(memory_dir: Path) -> List[str]:
+    """Parse > Project-Aliases: line from MEMORY.md. Returns lowercase alias keywords."""
+    index_path = memory_dir / MEMORY_INDEX
+    if not index_path.exists():
+        return []
+    try:
+        text = index_path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError):
+        return []
+    m = ALIAS_RE.search(text)
+    if not m:
+        return []
+    return [a.strip().lower() for a in m.group(1).split(",") if a.strip()]
+
+
+def _find_atom_path(name: str, all_atoms: List[Tuple[AtomEntry, Path]]) -> Optional[Path]:
+    """Find the file path for a named atom from the all_atoms list."""
+    for (aname, rel_path, _triggers), base_dir in all_atoms:
+        if aname == name:
+            return (base_dir / rel_path) if rel_path else (base_dir / "memory" / f"{name}.md")
+    return None
+
+
+def spread_related(
+    matched_names: set,
+    all_atoms: List[Tuple[AtomEntry, Path]],
+    already_injected: List[str],
+    max_depth: int = 1,
+) -> List[Tuple[AtomEntry, Path]]:
+    """沿 Related 邊擴散，回傳尚未匹配的相關 atoms (depth-limited BFS)."""
+    _RELATED_RE = re.compile(r"^- Related:\s*(.+)", re.MULTILINE)
+    visited = set(matched_names) | set(already_injected)
+    wave = list(matched_names)
+    result: List[Tuple[AtomEntry, Path]] = []
+
+    for _depth in range(max_depth):
+        next_wave: List[str] = []
+        for name in wave:
+            atom_path = _find_atom_path(name, all_atoms)
+            if not atom_path or not atom_path.exists():
+                continue
+            try:
+                text = atom_path.read_text(encoding="utf-8-sig")
+            except (OSError, UnicodeDecodeError):
+                continue
+            rm = _RELATED_RE.search(text)
+            if not rm:
+                continue
+            for rn in (r.strip() for r in rm.group(1).split(",") if r.strip()):
+                if rn not in visited:
+                    visited.add(rn)
+                    for entry_tuple in all_atoms:
+                        if entry_tuple[0][0] == rn:
+                            result.append(entry_tuple)
+                            next_wave.append(rn)
+                            break
+        wave = next_wave
+    return result
+
+
+def compute_activation(atom_name: str, atom_dir: Path) -> float:
+    """ACT-R base-level activation: B_i = ln(Σ t_k^{-0.5})."""
+    access_file = atom_dir / f"{atom_name}.access.json"
+    if not access_file.exists():
+        return -10.0
+    try:
+        data = json.loads(access_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return -10.0
+    timestamps = data.get("timestamps", [])
+    if not timestamps:
+        return -10.0
+    now = time.time()
+    total = 0.0
+    for ts in timestamps:
+        t_k = max(now - ts, 1.0)
+        total += t_k ** -0.5
+    return math.log(total) if total > 0 else -10.0
+
+
 def cwd_to_project_slug(cwd: str) -> str:
     """Convert CWD to Claude Code project slug.
     C:\\Projects\\sgi-server → c--Projects-sgi-server
@@ -221,6 +312,81 @@ def get_project_memory_dir(cwd: str) -> Optional[Path]:
     if project_mem.exists():
         return project_mem
     return None
+
+
+# ─── _AIDocs Bridge (v2.10) ──────────────────────────────────────────────
+
+AiDocsEntry = Tuple[str, str]  # (filename, description)
+
+
+def find_project_root(cwd: str) -> Optional[Path]:
+    """Walk up from CWD to find project root (contains _AIDocs/ or .git/ or .svn/)."""
+    if not cwd:
+        return None
+    p = Path(cwd)
+    for _ in range(4):  # cwd itself + max 3 levels up
+        if (p / "_AIDocs").is_dir():
+            return p
+        if (p / ".git").exists() or (p / ".svn").exists():
+            return p
+        parent = p.parent
+        if parent == p:
+            break
+        p = parent
+    return Path(cwd)  # fallback
+
+
+def parse_aidocs_index(project_root: Path) -> List[AiDocsEntry]:
+    """Parse _AIDocs/_INDEX.md table, return [(filename, description)]."""
+    index_path = project_root / "_AIDocs" / "_INDEX.md"
+    if not index_path.exists():
+        return []
+    try:
+        text = index_path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError):
+        return []
+
+    entries: List[AiDocsEntry] = []
+    in_table = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not in_table:
+            if stripped.startswith("| #") or stripped.startswith("|#"):
+                in_table = True
+                continue
+        else:
+            if stripped.startswith("|---") or stripped.startswith("| ---"):
+                continue
+            if not stripped.startswith("|"):
+                in_table = False
+                continue
+            cells = [c.strip() for c in stripped.split("|") if c.strip()]
+            if len(cells) >= 3:
+                fname = cells[1].strip("[]() ")
+                # Strip markdown links: [Name](./path) → Name
+                link_match = re.match(r"\[([^\]]+)\]", cells[1])
+                if link_match:
+                    fname = link_match.group(1)
+                desc = cells[2]
+                # Skip deprecated (strikethrough) entries
+                if fname.startswith("~~") or "淘汰" in desc:
+                    continue
+                entries.append((fname, desc))
+    return entries
+
+
+def extract_aidocs_keywords(entries: List[AiDocsEntry]) -> Dict[str, List[str]]:
+    """Extract search keywords from _AIDocs descriptions."""
+    STOP = {"的", "與", "和", "等", "個", "含", "—", "md", "分析", "說明", "文件", "專案"}
+    result: Dict[str, List[str]] = {}
+    for fname, desc in entries:
+        words = re.findall(r"[\u4e00-\u9fff]{2,}|[a-zA-Z_]{3,}", desc.lower())
+        keywords = [w for w in words if w not in STOP]
+        # Also include filename stem as keywords
+        stem = Path(fname).stem.lower().replace("_", " ").replace("-", " ")
+        keywords.extend(stem.split())
+        result[fname] = list(set(keywords))[:10]
+    return result
 
 
 def match_triggers(prompt: str, atoms: List[AtomEntry]) -> List[AtomEntry]:
@@ -688,6 +854,16 @@ def handle_session_start(input_data: Dict[str, Any], config: Dict[str, Any]) -> 
         state["injected_atoms"] = []
         state["phase"] = "working"
 
+        # ── v2.10: _AIDocs Bridge — scan project _AIDocs index ──────────
+        project_root = find_project_root(cwd)
+        aidocs_entries = parse_aidocs_index(project_root) if project_root else []
+        aidocs_keywords = extract_aidocs_keywords(aidocs_entries) if aidocs_entries else {}
+        state["aidocs"] = {
+            "project_root": str(project_root) if project_root else "",
+            "entries": [(f, d) for f, d in aidocs_entries],
+            "keywords": aidocs_keywords,
+        }
+
         g_names = [n for n, _, _ in global_atoms]
         p_names = [n for n, _, _ in project_atoms]
         lines = [
@@ -697,6 +873,15 @@ def handle_session_start(input_data: Dict[str, Any], config: Dict[str, Any]) -> 
         if p_names:
             lines.append(f"Project atoms: {', '.join(p_names)}.")
         lines.append("I will track file modifications and remind you to sync before ending.")
+
+        # Inject compact _AIDocs index (v2.10)
+        max_entries = config.get("aidocs", {}).get("max_session_start_entries", 15)
+        if aidocs_entries:
+            aidocs_lines = [f"[AIDocs] {len(aidocs_entries)} docs in _AIDocs/:"]
+            for fname, desc in aidocs_entries[:max_entries]:
+                clean = re.sub(r"[*~`]", "", desc).strip()
+                aidocs_lines.append(f"  - {fname}: {clean[:80]}")
+            lines.extend(aidocs_lines)
 
     # ── V2.6: Periodic review check ─────────────────────────────────────
     try:
@@ -770,12 +955,10 @@ def handle_user_prompt_submit(
     # ─── V2.8: Wisdom Engine — causal warnings + situation ──────────
     if WISDOM_AVAILABLE:
         try:
-            # Causal warnings from recently modified files
             mod_paths = [m["path"] for m in state.get("modified_files", [])]
             if mod_paths:
                 causal = get_causal_warnings(mod_paths)
                 lines.extend(causal)
-            # Situation classifier (uses topic_tracker signals)
             tracker = state.get("topic_tracker", {})
             prompt_analysis = {
                 "intent": tracker.get("intent_distribution", {}).get("top", ""),
@@ -787,6 +970,28 @@ def handle_user_prompt_submit(
                 lines.append(result["inject"])
         except Exception as e:
             print(f"[v2.8] Wisdom prompt error: {e}", file=sys.stderr)
+
+    # ─── Phase 0.5: _AIDocs keyword matching (v2.10) ──────────────────
+    aidocs_state = state.get("aidocs", {})
+    aidocs_kw_map = aidocs_state.get("keywords", {})
+    max_matches = config.get("aidocs", {}).get("max_prompt_matches", 3)
+    if aidocs_kw_map and prompt.strip():
+        matched_docs: List[str] = []
+        for fname, keywords in aidocs_kw_map.items():
+            if any(kw in prompt_lower for kw in keywords):
+                matched_docs.append(fname)
+        if matched_docs and len(matched_docs) <= 5:
+            aidocs_root = aidocs_state.get("project_root", "")
+            pointer_lines = ["[Guardian:AIDocs] Relevant project docs:"]
+            for doc in matched_docs[:max_matches]:
+                desc = ""
+                for f, d in aidocs_state.get("entries", []):
+                    if f == doc:
+                        desc = d
+                        break
+                doc_path = f"_AIDocs/{doc}" if aidocs_root else doc
+                pointer_lines.append(f"  \u2192 Read `{doc_path}` \u2014 {desc[:80]}")
+            lines.extend(pointer_lines)
 
     # ─── Phase 1: Atom auto-injection (Trigger matching) ─────────────
     atom_index = state.get("atom_index", {})
@@ -809,6 +1014,40 @@ def handle_user_prompt_submit(
     # Match prompt against triggers (keyword)
     matched_with_dir: List[Tuple[AtomEntry, Path]] = []
     prompt_lower = prompt.lower()
+    alias_injected_projects: set = set()  # v2.9: track alias-injected projects
+
+    # ── Cross-project atom discovery (v2.5) + alias matching (v2.9) ──
+    # Scan ALL project memory dirs for trigger matches, not just CWD project.
+    loaded_proj_names = set()
+    if proj_dir_str:
+        loaded_proj_names.add(Path(proj_dir_str).parent.name)
+    projects_dir = CLAUDE_DIR / "projects"
+    if projects_dir.is_dir():
+        for proj_dir in projects_dir.iterdir():
+            if not proj_dir.is_dir() or proj_dir.name in loaded_proj_names:
+                continue
+            cross_mem = proj_dir / "memory"
+            if not cross_mem.exists():
+                continue
+            # v2.9: Check project aliases before trigger matching
+            aliases = parse_project_aliases(cross_mem)
+            if aliases and any(alias in prompt_lower for alias in aliases):
+                try:
+                    mem_text = (cross_mem / MEMORY_INDEX).read_text(encoding="utf-8-sig")
+                    lines.append(f"[Guardian:AliasMatch] {proj_dir.name} matched via alias")
+                    lines.append(f"[ProjectMemory:{proj_dir.name}]\n{mem_text}")
+                    alias_injected_projects.add(proj_dir.name)
+                except (OSError, UnicodeDecodeError):
+                    pass
+            # Existing trigger-based cross-atom discovery
+            cross_atoms = parse_memory_index(cross_mem)
+            if not cross_atoms:
+                continue
+            cross_parent = cross_mem.parent
+            for name, rel_path, triggers in cross_atoms:
+                if name not in already_injected and any(kw in prompt_lower for kw in triggers):
+                    all_atoms.append(((name, rel_path, triggers), cross_parent))
+                    lines.append(f"[Guardian:CrossProject] {proj_dir.name}/{name} matched")
     for (name, rel_path, triggers), base_dir in all_atoms:
         if name not in already_injected and any(kw in prompt_lower for kw in triggers):
             matched_with_dir.append(((name, rel_path, triggers), base_dir))
@@ -853,6 +1092,15 @@ def handle_user_prompt_submit(
             if entry[0][0] not in superseded_names
         ]
 
+    # ── ACT-R Activation Sorting (v2.9) ─────────────────────────
+    # Sort matched atoms by time-weighted activation score (high → low)
+    def _activation_key(entry):
+        (name, rel_path, _triggers), base_dir = entry
+        atom_dir = (base_dir / rel_path).parent if rel_path else (base_dir / "memory")
+        return compute_activation(name, atom_dir)
+
+    matched_with_dir.sort(key=_activation_key, reverse=True)
+
     # Load atoms within budget
     newly_injected: List[str] = []
     if matched_with_dir:
@@ -881,35 +1129,30 @@ def handle_user_prompt_submit(
                 newly_injected.append(name)
                 break
 
-        # ── Related atom auto-loading (v2.1 Sprint 2) ─────────────
-        RELATED_RE = re.compile(r"^- Related:\s*(.+)", re.MULTILINE)
-        for (name, rel_path, triggers), base_dir in list(matched_with_dir):
-            atom_path = (base_dir / rel_path) if rel_path else (base_dir / "memory" / f"{name}.md")
-            if not atom_path.exists():
+        # ── Related-Edge Spreading (v2.9) ─────────────────────────
+        related_entries = spread_related(
+            set(newly_injected), all_atoms, already_injected, max_depth=1,
+        )
+        for (rname, rel_path, _triggers), base_dir in related_entries:
+            if rname in newly_injected:
+                continue
+            rpath = (base_dir / rel_path) if rel_path else (base_dir / "memory" / f"{rname}.md")
+            if not rpath.exists():
                 continue
             try:
-                atom_text = atom_path.read_text(encoding="utf-8-sig")
+                content = rpath.read_text(encoding="utf-8-sig")
             except (OSError, UnicodeDecodeError):
                 continue
-            rm = RELATED_RE.search(atom_text)
-            if not rm:
-                continue
-            related_names = [r.strip() for r in rm.group(1).split(",") if r.strip()]
-            for rn in related_names:
-                if rn in already_injected or rn in newly_injected:
-                    continue
-                # Find related atom in all_atoms
-                for (aname, arel, atrig), abase in all_atoms:
-                    if aname == rn:
-                        rpath = (abase / arel) if arel else (abase / "memory" / f"{rn}.md")
-                        if rpath.exists():
-                            try:
-                                first_line = rpath.read_text(encoding="utf-8-sig").split("\n", 1)[0].strip("# ").strip()
-                            except (OSError, UnicodeDecodeError):
-                                break
-                            atom_lines.append(f"[Atom:{rn}] (related\u2192{name}) {first_line}")
-                            newly_injected.append(rn)
-                        break
+            content_tokens = len(content) // 4
+            if used_tokens + content_tokens <= budget:
+                atom_lines.append(f"[Atom:{rname}] (related)\n{content}")
+                newly_injected.append(rname)
+                used_tokens += content_tokens
+            else:
+                first_line = content.split("\n", 1)[0].strip("# ").strip()
+                atom_lines.append(f"[Atom:{rname}] (related) {first_line} (full: Read {rel_path or rname + '.md'})")
+                newly_injected.append(rname)
+                break
 
         if atom_lines:
             lines.append("[Guardian:Memory] Trigger-matched atoms loaded:")
@@ -957,6 +1200,18 @@ def handle_user_prompt_submit(
                             changed = True
                         if changed:
                             apath.write_text(text, encoding="utf-8")
+                        # ACT-R access log (v2.9)
+                        try:
+                            access_file = apath.parent / f"{name}.access.json"
+                            if access_file.exists():
+                                adata = json.loads(access_file.read_text(encoding="utf-8"))
+                            else:
+                                adata = {"timestamps": []}
+                            adata["timestamps"].append(time.time())
+                            adata["timestamps"] = adata["timestamps"][-50:]
+                            access_file.write_text(json.dumps(adata), encoding="utf-8")
+                        except (OSError, json.JSONDecodeError):
+                            pass
                         # Promotion logic (v2.2) — auto-promote [臨]→[觀], hint [觀]→[固]
                         if new_count is not None:
                             conf_m = confidence_re.search(text)
@@ -988,6 +1243,16 @@ def handle_user_prompt_submit(
                     except (OSError, UnicodeDecodeError):
                         pass
                     break
+
+    # ── Blind-Spot Reporter (v2.9) ──────────────────────────────────
+    if not matched_with_dir and not newly_injected and not alias_injected_projects:
+        prompt_preview = prompt[:50].strip()
+        if len(prompt) > 50:
+            prompt_preview += "..."
+        lines.append(
+            f'[Guardian:BlindSpot] 未找到與 "{prompt_preview}" '
+            f'相關的記憶 atom。建議 LLM 主動搜尋檔案或詢問使用者。'
+        )
 
     # ─── Topic tracking (v2.2) ─────────────────────────────────────
     _update_topic_tracker(state, prompt, intent, newly_injected)
@@ -1024,6 +1289,26 @@ def handle_user_prompt_submit(
 
     write_state(session_id, state)
 
+    # ─── V2.4: Spawn detached extraction subprocess BEFORE output ──
+    # output_json/output_nothing call sys.exit(0), so this must come first.
+    # Subprocess survives parent exit — hook has 3s timeout but extraction needs ~30s.
+    rc = config.get("response_capture", {})
+    if rc.get("enabled", True) and rc.get("per_turn_enabled", True):
+        cwd = state.get("session", {}).get("cwd", "")
+        if cwd and state.get("session_context_injected", False):
+            import subprocess
+            extract_script = str(Path(__file__).parent / "extract-worker.py")
+            config_json = json.dumps(config)
+            try:
+                subprocess.Popen(
+                    [sys.executable, extract_script, session_id, cwd, config_json],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+            except OSError:
+                pass  # Non-critical
+
     if lines:
         output_json({
             "hookSpecificOutput": {
@@ -1033,19 +1318,6 @@ def handle_user_prompt_submit(
         })
     else:
         output_nothing()
-
-    # ─── V2.4: Launch background extraction of last assistant response ──
-    rc = config.get("response_capture", {})
-    if rc.get("enabled", True) and rc.get("per_turn_enabled", True):
-        cwd = state.get("session", {}).get("cwd", "")
-        if cwd and state.get("session_context_injected", False):
-            # Only after first prompt (there's no previous response on first prompt)
-            t = threading.Thread(
-                target=_async_extract_last_response,
-                args=(session_id, cwd, config),
-                daemon=True,
-            )
-            t.start()
 
 
 def handle_post_tool_use(input_data: Dict[str, Any], config: Dict[str, Any]) -> None:
@@ -1059,7 +1331,7 @@ def handle_post_tool_use(input_data: Dict[str, Any], config: Dict[str, Any]) -> 
     tool_input = input_data.get("tool_input", {})
     file_path = tool_input.get("file_path", "")
 
-    if file_path:
+    if tool_name in ("Edit", "Write") and file_path:
         state.setdefault("modified_files", []).append({
             "path": file_path,
             "tool": tool_name,
@@ -1095,6 +1367,21 @@ def handle_post_tool_use(input_data: Dict[str, Any], config: Dict[str, Any]) -> 
         normalized = file_path.replace("\\", "/")
         if "/memory/" in normalized and normalized.endswith(".md"):
             _trigger_incremental_index(config)
+
+    elif tool_name == "Read" and file_path:
+        # V2.10: Read Tracking — deduplicate, keep first occurrence only
+        accessed = state.setdefault("accessed_files", [])
+        if not any(a["path"] == file_path for a in accessed):
+            accessed.append({"path": file_path, "at": _now_iso()})
+            write_state(session_id, state)
+
+    elif tool_name == "Bash":
+        # V2.10: VCS query capture (git log/blame/show/diff, svn log/blame/diff)
+        command = tool_input.get("command", "")
+        if re.search(r"\b(git\s+(log|blame|show|diff)|svn\s+(log|blame|diff))\b", command):
+            vcs = state.setdefault("vcs_queries", [])
+            vcs.append({"command": command[:200], "at": _now_iso()})
+            write_state(session_id, state)
 
     output_nothing()
 
@@ -1186,10 +1473,12 @@ def _should_generate_episodic(state: Dict[str, Any], config: Dict[str, Any]) -> 
         return False
 
     mod_count = len(state.get("modified_files", []))
+    read_count = len(state.get("accessed_files", []))
     kq_count = len(state.get("knowledge_queue", []))
     min_files = ep_cfg.get("min_files", 1)
 
-    if mod_count < min_files and kq_count == 0:
+    # V2.10: Pure-read sessions (≥5 files) also warrant episodic atoms
+    if mod_count < min_files and kq_count == 0 and read_count < 5:
         return False
 
     # Skip very short sessions (< 2 minutes)
@@ -1318,13 +1607,18 @@ def _extract_all_assistant_texts(transcript_path: Path, max_chars: int = 20000) 
 
 
 def _call_ollama_generate(prompt: str, model: str = "qwen3:1.7b",
-                          timeout: int = 3) -> str:
-    """Call Ollama generate API. Returns raw response text."""
+                          timeout: int = 120) -> str:
+    """Call Ollama generate API. Returns raw response text.
+
+    Default timeout=120s: qwen3 thinking mode needs ~30s.
+    Background threads (extraction) can afford to wait.
+    """
     payload = json.dumps({
         "model": model,
         "prompt": prompt,
         "stream": False,
-        "options": {"temperature": 0.1, "num_predict": 500}
+        "format": "json",
+        "options": {"temperature": 0.1, "num_predict": 2048}
     }).encode("utf-8")
 
     req = urllib.request.Request(
@@ -1367,20 +1661,18 @@ def _llm_extract_knowledge(text: str, existing_queue: List[dict],
     if not text or len(text) < 50:
         return []
 
-    # Source-dependent limits
+    # Source-dependent limits (timeout handled by _call_ollama_generate default)
     if source == "per-turn":
         max_chars = 3000
         max_items = 2
-        timeout = 3
     else:  # session-end
         max_chars = 4000
         max_items = 5
-        timeout = 10
 
     truncated = text[:max_chars]
     prompt = _EXTRACT_PROMPT_TEMPLATE.format(text=truncated)
 
-    raw = _call_ollama_generate(prompt, timeout=timeout)
+    raw = _call_ollama_generate(prompt)
     if not raw:
         return []
 
@@ -1610,10 +1902,22 @@ def _build_episodic_summary(state: Dict[str, Any]) -> Dict[str, Any]:
 
     atoms_referenced = list(state.get("injected_atoms", []))
 
+    # V2.10: Read tracking
+    accessed = state.get("accessed_files", [])
+    accessed_areas: Counter = Counter()
+    for a in accessed:
+        area = _extract_area(a.get("path", ""))
+        accessed_areas[area] += 1
+
     # Topic tracker enrichment (v2.2)
     tracker = state.get("topic_tracker", {})
     intent_dist = tracker.get("intent_distribution", {})
     dominant_intent = max(intent_dist, key=intent_dist.get) if intent_dist else "general"
+
+    # V2.10: Use accessed areas as fallback for primary_area when no modifications
+    if not work_areas and accessed_areas:
+        acc_areas = [{"area": a, "count": c} for a, c in accessed_areas.most_common()]
+        primary_area = acc_areas[0]["area"] if acc_areas else "session-work"
 
     return {
         "work_areas": work_areas,
@@ -1627,6 +1931,10 @@ def _build_episodic_summary(state: Dict[str, Any]) -> Dict[str, Any]:
         "session_description": tracker.get("first_prompt_summary", ""),
         "keyword_topics": tracker.get("keyword_signals", []),
         "related_episodic": tracker.get("related_episodic", []),
+        "accessed_files": accessed,
+        "files_accessed": len(accessed),
+        "accessed_areas": [{"area": a, "count": c} for a, c in accessed_areas.most_common()],
+        "vcs_queries": state.get("vcs_queries", []),
     }
 
 
@@ -1709,6 +2017,26 @@ def _update_memory_index(memory_dir: Path, atom_name: str, triggers: list) -> No
     index_path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _build_read_tracking_section(summary: Dict[str, Any]) -> str:
+    """Build '## 閱讀軌跡' section from accessed files and VCS queries (V2.10)."""
+    accessed = summary.get("accessed_files", [])
+    vcs = summary.get("vcs_queries", [])
+    if not accessed and not vcs:
+        return ""
+    lines = ["## 閱讀軌跡\n"]
+    for af in accessed[:30]:
+        lines.append(f"- {af['path']}")
+    if accessed:
+        lines.append("")
+    if vcs:
+        lines.append("### 版控查詢")
+        for v in vcs[:10]:
+            lines.append(f"- `{v['command']}`")
+        lines.append("")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _build_cross_session_section(state: Dict[str, Any]) -> str:
     """Build '## 跨 Session 觀察' section from cross-session observations."""
     obs = state.get("cross_session_observations", [])
@@ -1777,14 +2105,16 @@ def _generate_episodic_atom(
         knowledge_lines.append(
             f"- [臨] 引用 atoms: {', '.join(summary['atoms_referenced'])}"
         )
+    for ki in summary["knowledge_items"]:
+        knowledge_lines.append(f"- [{ki['classification'].strip('[]')}] {ki['content']}")
+
     # V2.6: Record which atoms were MODIFIED (for oscillation detection)
     atoms_modified = state.get("iteration_metrics", {}).get("atoms_modified", [])
     if atoms_modified:
         knowledge_lines.append(
             f"- [臨] 修改 atoms: {', '.join(atoms_modified)}"
         )
-    for ki in summary["knowledge_items"]:
-        knowledge_lines.append(f"- [{ki['classification'].strip('[]')}] {ki['content']}")
+
     # V2.7: Record quality feedback (files rewritten from previous sessions)
     qf_files = state.get("quality_feedback", {}).get("rewritten_files", [])
     if qf_files:
@@ -1803,6 +2133,18 @@ def _generate_episodic_atom(
             knowledge_lines.append(
                 f"  - {qf['path']} (前 session: {qf.get('original_session', '?')})"
             )
+
+    # V2.10: Read tracking summary
+    if summary.get("files_accessed", 0) > 0:
+        knowledge_lines.append(f"- [臨] 閱讀 {summary['files_accessed']} 個檔案")
+        if summary.get("accessed_areas"):
+            read_areas_str = ", ".join(
+                f"{ra['area']} ({ra['count']})" for ra in summary["accessed_areas"][:5]
+            )
+            knowledge_lines.append(f"- [臨] 閱讀區域: {read_areas_str}")
+    vcs = summary.get("vcs_queries", [])
+    if vcs:
+        knowledge_lines.append(f"- [臨] 版控查詢 {len(vcs)} 次")
 
     # Build 摘要 section (v2.2)
     desc = summary.get("session_description", "")
@@ -1850,6 +2192,7 @@ def _generate_episodic_atom(
         + f"\n"
         f"\n"
         + (f"## 關聯\n\n" + "\n".join(relation_lines) + "\n\n" if relation_lines else "")
+        + _build_read_tracking_section(summary)
         + _build_cross_session_section(state)
         + f"## 行動\n"
         f"\n"
@@ -1870,7 +2213,174 @@ def _generate_episodic_atom(
     return atom_name
 
 
-# ─── V2.7: Output Quality Feedback ───────────────────────────────────────────
+def handle_session_end(input_data: Dict[str, Any], config: Dict[str, Any]) -> None:
+    session_id = input_data.get("session_id", "")
+    state = read_state(session_id)
+    if not state:
+        sys.exit(0)
+        return
+
+    state["ended_at"] = _now_iso()
+    state["phase"] = "done"
+
+    # ─── V2.4: Collect any pending per-turn extraction ──────────────
+    pending = state.pop("pending_extraction", [])
+    if pending:
+        state.setdefault("knowledge_queue", []).extend(pending)
+
+    # ─── V2.4: SessionEnd transcript extraction (补漏) ────────────────
+    rc = config.get("response_capture", {})
+    if rc.get("enabled", True):
+        try:
+            cwd = state.get("session", {}).get("cwd", "")
+            transcript = _find_session_transcript(session_id, cwd)
+            if transcript:
+                se_max = rc.get("session_end_max_chars", 20000)
+                texts = _extract_all_assistant_texts(transcript, max_chars=se_max)
+                if texts:
+                    combined = "\n---\n".join(texts)
+                    existing = state.get("knowledge_queue", [])
+                    new_items = _llm_extract_knowledge(
+                        combined, existing, source="session-end"
+                    )
+                    if new_items:
+                        state.setdefault("knowledge_queue", []).extend(new_items)
+                        print(
+                            f"[v2.4] SessionEnd extraction: {len(new_items)} items",
+                            file=sys.stderr,
+                        )
+        except Exception as e:
+            print(f"[v2.4] SessionEnd extraction error: {e}", file=sys.stderr)
+
+    # ─── V2.4 Phase 3: Cross-session pattern consolidation ──────────
+    cross_obs = []
+    kq = state.get("knowledge_queue", [])
+    if kq and config.get("vector_search", {}).get("enabled", True):
+        try:
+            cross_obs = _check_cross_session_patterns(kq, session_id, config)
+            if cross_obs:
+                state["cross_session_observations"] = cross_obs
+                print(
+                    f"[v2.4] Cross-session: {len(cross_obs)} patterns detected",
+                    file=sys.stderr,
+                )
+        except Exception as e:
+            print(f"[v2.4] Cross-session check error: {e}", file=sys.stderr)
+
+    mod_count = len(state.get("modified_files", []))
+    kq_count = len(state.get("knowledge_queue", []))
+    if state.get("sync_pending") and (mod_count > 0 or kq_count > 0):
+        print(
+            f"Warning: Session ending with unsaved work. "
+            f"{mod_count} modified files, {kq_count} knowledge items.",
+            file=sys.stderr,
+        )
+
+    # ─── V2.6: Self-iteration metrics + oscillation detection ──────
+    try:
+        metrics = _collect_iteration_metrics(state)
+        state["iteration_metrics"] = metrics
+
+        oscillations = _detect_oscillation(state, config)
+        if oscillations:
+            state["iteration_metrics"]["oscillations"] = oscillations
+            for osc in oscillations:
+                print(
+                    f"[v2.6] Oscillation detected: {osc['atom']} "
+                    f"({osc['count']} sessions)",
+                    file=sys.stderr,
+                )
+    except Exception as e:
+        print(f"[v2.6] Self-iteration metrics error: {e}", file=sys.stderr)
+
+    # ─── V2.8: Wisdom Engine — session reflection ────────────────────
+    if WISDOM_AVAILABLE:
+        try:
+            wisdom_reflect(state)
+        except Exception as e:
+            print(f"[v2.8] Wisdom reflect error: {e}", file=sys.stderr)
+
+    # V2.10: Staging area reminder
+    staging_dir = MEMORY_DIR / "_staging"
+    if staging_dir.exists():
+        staging_files = list(staging_dir.glob("*.md"))
+        if staging_files:
+            print(
+                f"[v2.10] _staging/ 有 {len(staging_files)} 個暫存檔案待清理",
+                file=sys.stderr,
+            )
+
+    # v2.1 Task #2: Auto-generate episodic atom
+    episodic_generated = False
+    if config.get("episodic", {}).get("auto_generate", True):
+        try:
+            _generate_episodic_atom(session_id, state, config)
+            episodic_generated = True
+        except Exception as e:
+            print(f"[episodic] generation failed: {e}", file=sys.stderr)
+
+    write_state(session_id, state)
+
+    # v2.1 Sprint 3: Trigger incremental vector index if atoms were modified
+    modified = state.get("modified_files", [])
+    has_atom_changes = any(
+        "/memory/" in m.get("path", "").replace("\\", "/")
+        and m.get("path", "").endswith(".md")
+        for m in modified
+    )
+    if has_atom_changes or episodic_generated:
+        _trigger_incremental_index(config)
+
+    sys.exit(0)
+
+
+# ─── Dispatcher ──────────────────────────────────────────────────────────────
+
+HANDLERS = {
+    "SessionStart": handle_session_start,
+    "UserPromptSubmit": handle_user_prompt_submit,
+    "PostToolUse": handle_post_tool_use,
+    "PreCompact": handle_pre_compact,
+    "Stop": handle_stop,
+    "SessionEnd": handle_session_end,
+}
+
+
+def main():
+    # Force UTF-8 output on Windows
+    if sys.platform == "win32":
+        sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', closefd=False)
+        sys.stderr = open(sys.stderr.fileno(), mode='w', encoding='utf-8', closefd=False)
+
+    WORKFLOW_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Read JSON from stdin
+    try:
+        raw = sys.stdin.buffer.read()
+        input_data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        # Can't parse input; exit silently (non-blocking)
+        sys.exit(0)
+
+    config = load_config()
+    if not config.get("enabled", True):
+        sys.exit(0)
+
+    event = input_data.get("hook_event_name", "")
+    handler = HANDLERS.get(event)
+    if handler:
+        try:
+            handler(input_data, config)
+        except Exception as e:
+            # Never crash; log to stderr (verbose mode only) and continue
+            print(f"[workflow-guardian] Error in {event}: {e}", file=sys.stderr)
+            sys.exit(0)
+    else:
+        sys.exit(0)
+
+
+
+# ─── V2.7: Output Quality Feedback ──────────────────────────────────────────
 
 
 def _check_output_quality(
@@ -2122,160 +2632,6 @@ def _save_review_marker(total_sessions: int) -> None:
             json.dump(marker, f, ensure_ascii=False, indent=2)
     except OSError:
         pass
-
-
-def handle_session_end(input_data: Dict[str, Any], config: Dict[str, Any]) -> None:
-    session_id = input_data.get("session_id", "")
-    state = read_state(session_id)
-    if not state:
-        sys.exit(0)
-        return
-
-    state["ended_at"] = _now_iso()
-    state["phase"] = "done"
-
-    # ─── V2.4: Collect any pending per-turn extraction ──────────────
-    pending = state.pop("pending_extraction", [])
-    if pending:
-        state.setdefault("knowledge_queue", []).extend(pending)
-
-    # ─── V2.4: SessionEnd transcript extraction (补漏) ────────────────
-    rc = config.get("response_capture", {})
-    if rc.get("enabled", True):
-        try:
-            cwd = state.get("session", {}).get("cwd", "")
-            transcript = _find_session_transcript(session_id, cwd)
-            if transcript:
-                se_max = rc.get("session_end_max_chars", 20000)
-                texts = _extract_all_assistant_texts(transcript, max_chars=se_max)
-                if texts:
-                    combined = "\n---\n".join(texts)
-                    existing = state.get("knowledge_queue", [])
-                    new_items = _llm_extract_knowledge(
-                        combined, existing, source="session-end"
-                    )
-                    if new_items:
-                        state.setdefault("knowledge_queue", []).extend(new_items)
-                        print(
-                            f"[v2.4] SessionEnd extraction: {len(new_items)} items",
-                            file=sys.stderr,
-                        )
-        except Exception as e:
-            print(f"[v2.4] SessionEnd extraction error: {e}", file=sys.stderr)
-
-    # ─── V2.4 Phase 3: Cross-session pattern consolidation ──────────
-    cross_obs = []
-    kq = state.get("knowledge_queue", [])
-    if kq and config.get("vector_search", {}).get("enabled", True):
-        try:
-            cross_obs = _check_cross_session_patterns(kq, session_id, config)
-            if cross_obs:
-                state["cross_session_observations"] = cross_obs
-                print(
-                    f"[v2.4] Cross-session: {len(cross_obs)} patterns detected",
-                    file=sys.stderr,
-                )
-        except Exception as e:
-            print(f"[v2.4] Cross-session check error: {e}", file=sys.stderr)
-
-    mod_count = len(state.get("modified_files", []))
-    kq_count = len(state.get("knowledge_queue", []))
-    if state.get("sync_pending") and (mod_count > 0 or kq_count > 0):
-        print(
-            f"Warning: Session ending with unsaved work. "
-            f"{mod_count} modified files, {kq_count} knowledge items.",
-            file=sys.stderr,
-        )
-
-    # ─── V2.6: Self-iteration metrics + oscillation detection ──────
-    try:
-        metrics = _collect_iteration_metrics(state)
-        state["iteration_metrics"] = metrics
-
-        oscillations = _detect_oscillation(state, config)
-        if oscillations:
-            state["iteration_metrics"]["oscillations"] = oscillations
-            for osc in oscillations:
-                print(
-                    f"[v2.6] Oscillation detected: {osc['atom']} "
-                    f"({osc['count']} sessions)",
-                    file=sys.stderr,
-                )
-    except Exception as e:
-        print(f"[v2.6] Self-iteration metrics error: {e}", file=sys.stderr)
-
-    # ─── V2.8: Wisdom Engine — session reflection ────────────────────
-    if WISDOM_AVAILABLE:
-        try:
-            wisdom_reflect(state)
-        except Exception as e:
-            print(f"[v2.8] Wisdom reflect error: {e}", file=sys.stderr)
-
-    # v2.1 Task #2: Auto-generate episodic atom
-    if config.get("episodic", {}).get("auto_generate", True):
-        try:
-            _generate_episodic_atom(session_id, state, config)
-        except Exception as e:
-            print(f"[episodic] generation failed: {e}", file=sys.stderr)
-
-    write_state(session_id, state)
-
-    # v2.1 Sprint 3: Trigger incremental vector index if atoms were modified
-    modified = state.get("modified_files", [])
-    has_atom_changes = any(
-        "/memory/" in m.get("path", "").replace("\\", "/")
-        and m.get("path", "").endswith(".md")
-        for m in modified
-    )
-    if has_atom_changes:
-        _trigger_incremental_index(config)
-
-    sys.exit(0)
-
-
-# ─── Dispatcher ──────────────────────────────────────────────────────────────
-
-HANDLERS = {
-    "SessionStart": handle_session_start,
-    "UserPromptSubmit": handle_user_prompt_submit,
-    "PostToolUse": handle_post_tool_use,
-    "PreCompact": handle_pre_compact,
-    "Stop": handle_stop,
-    "SessionEnd": handle_session_end,
-}
-
-
-def main():
-    # Force UTF-8 output on Windows
-    if sys.platform == "win32":
-        sys.stdout = open(sys.stdout.fileno(), mode='w', encoding='utf-8', closefd=False)
-        sys.stderr = open(sys.stderr.fileno(), mode='w', encoding='utf-8', closefd=False)
-
-    WORKFLOW_DIR.mkdir(parents=True, exist_ok=True)
-
-    # Read JSON from stdin
-    try:
-        raw = sys.stdin.buffer.read()
-        input_data = json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
-        # Can't parse input; exit silently (non-blocking)
-        sys.exit(0)
-
-    config = load_config()
-    if not config.get("enabled", True):
-        sys.exit(0)
-
-    event = input_data.get("hook_event_name", "")
-    handler = HANDLERS.get(event)
-    if handler:
-        try:
-            handler(input_data, config)
-        except Exception as e:
-            # Never crash; log to stderr (verbose mode only) and continue
-            print(f"[workflow-guardian] Error in {event}: {e}", file=sys.stderr)
-            sys.exit(0)
-    else:
-        sys.exit(0)
 
 
 if __name__ == "__main__":

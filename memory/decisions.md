@@ -4,15 +4,15 @@
 - Confidence: [固]
 - Trigger: 全域決策, 工具, 工作流, workflow, guardian, hooks, MCP, 記憶系統
 - Last-used: 2026-03-11
-- Confirmations: 69
+- Confirmations: 71
 - Type: decision
 
 ## 知識
 
 ### 核心架構
-- [固] 原子記憶 V2.7：V2.6 + CLAUDE.md 精簡 50%（289→144 行，移除 hook 實作細節與重複內容）+ failures/toolchain atoms + Output Quality Feedback
+- [固] 原子記憶 V2.10：V2.9 檢索強化 + V2.10 Session 全軌跡追蹤 + _AIDocs Bridge + 暫存區管理
 - [固] 雙 LLM：Claude Code（雲端決策）+ Ollama qwen3（本地語意處理）
-- [固] 7 hook 事件全由 workflow-guardian.py 統一處理（SessionStart/UserPromptSubmit/PostToolUse/PreCompact/Stop/SessionEnd + PreToolUse 由 inbox-check.js）
+- [固] 6 hook 事件全由 workflow-guardian.py 統一處理（SessionStart/UserPromptSubmit/PostToolUse/PreCompact/Stop/SessionEnd）
 
 ### 記憶檢索管線（V2.5）
 - [固] UserPromptSubmit: Intent 分類（qwen3:1.7b）→ Trigger 匹配 → Vector Search → Keyword Boost → Ranked Merge → additionalContext
@@ -59,7 +59,7 @@
 - [固] **命名時機**：(1) 開始執行一個有意義的修改前 (2) 使用者給出明確指示時 (3) 發現重要邏輯洞察時 (4) debug 進入反覆修正時
 
 ### 自我迭代引擎（Self-Iteration V2.6）
-- [固] **8 條演進原則**（跨學科理論背書，詳見 `memory/openclaw-self-iteration.md`）：
+- [固] **8 條演進原則**（跨學科理論背書，詳見 `memory/self-iteration.md`）：
   - (1) 品質函數：確認(+)/糾正(−)/無回饋(0) 三類訊號驅動規則調整
   - (2) 收斂優先：規則總數趨向收斂，新增前先檢查可合併的既有規則
   - (3) 證據門檻：≥2 次獨立 session 觀察才建立正式規則（hook 自動追蹤）
@@ -100,6 +100,27 @@
 - [觀] /resume Skill：自動續接 Session（收集狀態→生成 prompt→MCP 自動化開新視窗→貼上→執行）
 - [固] /resume 必須用 "Open in New Window"（不可用 "Open in New Tab"），避免側邊欄焦點衝突
 
+### 記憶檢索強化（V2.9）
+- [固] Project-Aliases：MEMORY.md 加 `> Project-Aliases:` 行，跨專案掃描先比對 aliases → 注入全文
+- [固] Related-Edge Spreading：`spread_related()` BFS depth=1，沿 Related 邊帶出相關 atoms
+- [固] ACT-R Activation Scoring：`B_i = ln(Σ t_k^{-0.5})`，access.json 保留最近 50 筆，高分優先注入
+- [固] Blind-Spot Reporter：三重空判斷（matched + injected + alias 全空）→ 注入 `[Guardian:BlindSpot]`
+
+### Session 全軌跡追蹤（V2.10）
+- [固] Read Tracking：PostToolUse 攔截 Read tool，去重記錄 accessed_files（同檔只記首次）
+- [固] VCS Query Capture：PostToolUse 攔截 Bash tool，regex 匹配 git/svn log/blame/show/diff
+- [固] Episodic 閱讀軌跡：`_build_read_tracking_section()` 生成 `## 閱讀軌跡` section（最多 30 檔 + 10 筆版控查詢）
+- [固] 純閱讀 Session：accessed_files ≥ 5 且無修改時也生成 episodic atom
+- [固] 暫存區管理：`memory/_staging/` 存放續接 prompt 等臨時檔案，.gitignore 排除，SessionEnd 提醒清理
+
+### _AIDocs Bridge（V2.10）
+- [固] SessionStart 掃描專案 `_AIDocs/_INDEX.md`，解析 entries + keywords 存入 state
+- [固] UserPromptSubmit keyword matching → 注入 `[Guardian:AIDocs]` 指標（最多 3 筆）
+
+### 回應萃取改進（V2.10）
+- [固] V2.4 萃取改用 extract-worker.py 獨立子 process（hook 有 3s timeout，萃取需 ~30s）
+- [固] _call_ollama_generate: num_predict=2048, timeout=120s, format=json
+
 ### 歷史決策
 - [固] 記憶檢索統一用 Python，已移除 Node.js memory-v2（2026-03-05 退役）
 - [固] Stop hook 只保留 Guardian 閘門，移除 Discord 通知
@@ -125,3 +146,5 @@
 - 2026-03-10: [觀] V2.8 Phase 2 — 因果圖種子 3 edges + add_causal_edge() helper + guardian import 更新 + 反思校準待 10+ sessions
 - 2026-03-11: [觀] V2.8 Phase 3 — BFS dedup 修復 + 情境分類器閾值調校（2/6→4/10, cap=5）+ Bayesian auto-update 設計（未啟用）
 - 2026-03-11: [觀] /resume Skill 建立 — MCP 自動化續接（Open in New Window + clipboard + paste + enter）
+- 2026-03-11: [固] V2.9 檢索強化 — Project-Aliases + Related-Edge Spreading + ACT-R Activation + Blind-Spot Reporter
+- 2026-03-11: [固] V2.10 合併 — Session Read Tracking + VCS Query Capture + _AIDocs Bridge + 暫存區 + extract-worker subprocess

@@ -6,6 +6,7 @@
 
 | 日期 | 變更 | 影響檔案 |
 |------|------|---------|
+| 2026-03-11 | V2.10 合併更新：從辦公室 repo 合併 V2.9 檢索強化（Project-Aliases, Related-Edge Spreading, ACT-R, Blind-Spot）+ V2.10 Session 全軌跡追蹤 + _AIDocs Bridge + 暫存區 + extract-worker subprocess + Wells fork（IDENTITY.md, USER.md）+ 新 atoms/commands | 幾乎全部核心檔案 |
 | 2026-03-10 | Wisdom Engine V2.8 Phase 2：因果圖種子 3 edges（guardian/encoding, atoms/vector, CLAUDE.md/context）+ add_causal_edge() helper + guardian import 更新 + 反思校準狀態記錄 | wisdom_engine.py, workflow-guardian.py, causal_graph.json, DESIGN.md, decisions.md |
 | 2026-03-10 | SPEC v2.7 清理：移除 40+ 處版本標註（v2.1/Sprint N）、合併元資料表格（必要+可選統一）、版本紀錄壓縮（9→7 條）、版本號 v2.6→v2.7 | SPEC_Atomic_Memory_System.md |
 | 2026-03-10 | V2.7 全文件版本同步：CLAUDE.md 精簡 50%（289→144 行，移除 hook 實作細節與重複偏好）、README/Install-forAI/MEMORY.md/decisions.md 版本號更新至 V2.7、架構樹加入 failures.md + toolchain.md、Token 估算更新（~1,400-1,900 tokens） | CLAUDE.md, README.md, Install-forAI.md, MEMORY.md, decisions.md, _CHANGELOG.md |
