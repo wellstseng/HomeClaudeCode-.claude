@@ -57,7 +57,20 @@
       "Bash(ollama --version)",
       "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\([m[''name''] for m in d.get\\(''models'',[]\\)]\\)\")",
       "Bash(grep -E \"\\\\.\\(cs\\)$\")",
-      "WebFetch(domain:redmine-70.uj.com.tw)"
+      "WebFetch(domain:redmine-70.uj.com.tw)",
+      "Bash(\"/c/Program Files/TortoiseSVN/bin/TortoiseProc.exe\" /command:commit /path:\"C:\\\\Projects\\\\sgi_client\\\\client\\\\Assets\\\\ILRuntimeScripts\\\\ILScript~\\\\SharedScript\\\\ILToMain\\\\ColorTable.cs*C:\\\\Projects\\\\sgi_client\\\\client\\\\Assets\\\\MainScripts\\\\Module\\\\SharedScript\\\\ILToMain\\\\ColorTable.cs*C:\\\\Projects\\\\sgi_client\\\\client\\\\Assets\\\\MainScripts\\\\Game\\\\Map\\\\BattleStratagemCircle.cs*C:\\\\Projects\\\\sgi_client\\\\client\\\\Assets\\\\MainScripts\\\\Game\\\\Map\\\\BattleStratagemController.cs*C:\\\\Projects\\\\sgi_client\\\\client\\\\Assets\\\\MainScripts\\\\Module\\\\GameMap\\\\ViewObject\\\\EffectAsset.cs*C:\\\\Projects\\\\sgi_client\\\\client\\\\Assets\\\\MainScripts\\\\Module\\\\Form\\\\ORM\\\\ClientV2\\\\auto_generate\\\\DesignSkillTable.cs\" /logmsg:\"#12513 軍策施放範圍框顏色依ExTarget判斷\\(綠=正面/紅=負面/白=中立\\) + 預警框色碼統一至ColorTable\")",
+      "Bash(xargs grep -l \"missionCase.*210\\\\|MissionCase.*210\")",
+      "Bash(xargs grep -l \"missionCase\\\\|MissionCase\")",
+      "Bash(xargs grep -l \"MissionCase\\\\|MissionCheck\")",
+      "Bash(xargs grep -l \"case.*210\\\\|MissionCase.*210\")",
+      "Bash(grep -l \"41501\" /c/Projects/sgi_client/form/JSON/Client/*.json)",
+      "Bash(grep -n \"M2CSearchEntity\\\\|M2C_SearchEntity\" /c/Projects/sgi_client/client/Assets/ILRuntimeScripts/ILScript~/NetworkModule/Message/*.cs)",
+      "Bash(grep -E \"\\\\.cs$\")",
+      "Bash(python -c \":*)",
+      "Bash(wmic process where processid=77188 get ExecutablePath,CommandLine /format:list)",
+      "Bash(wmic process where processid=77188 get CommandLine /format:list)",
+      "Bash(wmic process where processid=77188 get ExecutablePath /format:list)",
+      "Bash(python:*)"
     ],
     "additionalDirectories": [
       "C:\\Users\\holylight\\.claude",
