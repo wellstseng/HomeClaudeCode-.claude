@@ -70,7 +70,8 @@
       "Bash(wmic process where processid=77188 get ExecutablePath,CommandLine /format:list)",
       "Bash(wmic process where processid=77188 get CommandLine /format:list)",
       "Bash(wmic process where processid=77188 get ExecutablePath /format:list)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Read(//d/tmp/myHomeClaudeCode/**)"
     ],
     "additionalDirectories": [
       "C:\\Users\\holylight\\.claude",
