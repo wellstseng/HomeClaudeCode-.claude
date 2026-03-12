@@ -71,7 +71,11 @@
       "Bash(wmic process where processid=77188 get CommandLine /format:list)",
       "Bash(wmic process where processid=77188 get ExecutablePath /format:list)",
       "Bash(python:*)",
-      "Read(//d/tmp/myHomeClaudeCode/**)"
+      "Read(//d/tmp/myHomeClaudeCode/**)",
+      "Bash(cp \"$HOME/.claude/USER.md\" \"$HOME/.claude/USER.template.md\")",
+      "Bash(cp \"$HOME/.claude/USER.md\" \"$HOME/.claude/USER-holylight.md\")",
+      "Bash(bash \"$HOME/.claude/hooks/user-init.sh\")",
+      "Read(//c/Users/holylight/.claude/$HOME/.claude/**)"
     ],
     "additionalDirectories": [
       "C:\\Users\\holylight\\.claude",
@@ -88,6 +92,11 @@
     "SessionStart": [
       {
         "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/user-init.sh\"",
+            "timeout": 3
+          },
           {
             "type": "command",
             "command": "python \"$HOME/.claude/hooks/workflow-guardian.py\"",

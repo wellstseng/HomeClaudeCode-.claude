@@ -45,6 +45,10 @@ memory/episodic/
 # ─── Distant memory archive (expired atoms) ───────────────
 memory/_distant/
 
+# ─── User-specific config (per-user, auto-generated) ──────
+USER.md
+USER-*.md
+
 # ─── User-specific atoms (hardware, local env) ────────────
 memory/hardware.md
 
