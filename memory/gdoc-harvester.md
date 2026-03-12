@@ -1,6 +1,6 @@
 ---
 name: gdoc-harvester
-description: Google Docs/Sheets 收割工具經驗 — Playwright + Chrome + cookie 同步 + aiohttp
+description: Google Docs/Sheets/Slides 收割工具經驗 — Playwright + Chrome + page.goto export
 type: project
 ---
 
@@ -22,8 +22,8 @@ type: project
 
 4. **`page.evaluate` + `fetch()` 被 CORS 擋** — Google export redirect 跨域
 
-5. **export page session 不同步**
-   - 最終解法: **aiohttp + browser cookies 同步**（`context.cookies()` → `aiohttp.CookieJar`）
+5. **aiohttp cookie 同步不足** — Sheets export 全部 401
+   - 最終解法: **改用 `page.goto(export_url)` + `resp.body()`**，直接帶完整 browser auth，不再用 aiohttp
 
 6. **framenavigated race condition** — 同一 doc_id 多次觸發
    - 解法: `on_page_navigate` 在第一個 await 前 `visited.add(doc_id)` 佔位
@@ -34,23 +34,22 @@ type: project
 8. **標題抓取失敗** — Google export HTML 的 `<title>` 常空或只有 doc_id
    - 解法: 多層 fallback: `<title>` → h1/h2/h3 → 第一段文字 → doc_id
 
-9. **Sheets export 全部 401/400** — aiohttp cookie 同步可能不足
-   - 狀態: **未解決**。所有 Sheet 都 401 或 400，Doc 部分也有 401（可能是不同帳號的文件）
-   - 可能原因: Sheets API 需要的 auth token 不在一般 cookies 裡，或需要 SAPISIDHASH header
+9. **Sheets export 全部 401/400** — aiohttp cookie 同步不足
+   - 狀態: **已修正**。改用 `page.goto(export_url)` + `resp.body()` 取代 aiohttp，直接帶 browser auth
 
-10. **GitLab 登入無法持續** — copytree 完整 profile 後仍無法登入，或關 tab 後被踢
-    - 狀態: **未解決**。嘗試了 copytree 整個 Default profile（含 Local Storage、IndexedDB），仍失敗
-    - 可能原因: CSRF token 時效、session cookie 綁定 IP/fingerprint、或 Playwright persistent context 的 storage 機制與原生 Chrome 不完全相容
+10. **GitLab 登入無法持續** — copytree 完整 profile 後仍無法登入
+    - 狀態: **已解決**。放棄複製 cookies 方案，改為首次在 Playwright 收割瀏覽器裡手動登入，persistent context 會記住
 
-11. **Google Slides 不支援** — 只偵測 document/d/ 和 spreadsheets/d/
-    - 狀態: **未實作**。需加 presentation/d/ pattern + export（PDF/PPTX，無 HTML export）
+11. **Google Slides 支援**
+    - 狀態: **已實作**。presentation/d/ pattern + capture_slide()（export PDF + frontmatter .md 索引）
 
 ### 架構
 
 - Playwright Chrome (persistent context) → 使用者瀏覽
-- `framenavigated` 偵測 Google Docs/Sheets URL
-- `aiohttp` + browser cookies → 背景下載 export HTML/CSV
+- `framenavigated` 偵測 Google Docs/Sheets/Slides URL
+- `page.goto(export_url)` + `resp.body()` → 背景下載 export（HTML/CSV/PDF），自帶 browser auth
 - `markdownify` + `BeautifulSoup` → Markdown 轉換 + 連結提取
+- Slides → PDF export（無 HTML export）
 - Dashboard (`http://127.0.0.1:8787`) → 即時進度（含摘要預覽）
 - 結束後自動產生 `_INDEX.md` 總清單
 

@@ -113,6 +113,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
   .stat-card .num { font-size: 1.8em; font-weight: bold; }
   .stat-card .num.docs { color: #4ecca3; }
   .stat-card .num.sheets { color: #4e9fcc; }
+  .stat-card .num.slides { color: #cc9f4e; }
   .stat-card .num.err { color: #e94560; }
   .stat-card .label { font-size: 0.8em; color: #888; margin-top: 3px; }
   .file-list { margin-top: 15px; }
@@ -138,6 +139,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
   }
   .type-badge.doc { background: #4ecca322; color: #4ecca3; }
   .type-badge.sheet { background: #4e9fcc22; color: #4e9fcc; }
+  .type-badge.slide { background: #cc9f4e22; color: #cc9f4e; }
   .empty-state { text-align: center; padding: 60px 20px; color: #555; }
   .empty-state .icon { font-size: 3em; margin-bottom: 10px; }
   .empty-state p { font-size: 0.95em; }
@@ -167,6 +169,7 @@ async function update() {
     document.getElementById('stats').innerHTML = `
       <div class="stat-card"><div class="num docs">${s.stats?.docs ?? 0}</div><div class="label">Docs</div></div>
       <div class="stat-card"><div class="num sheets">${s.stats?.sheets ?? 0}</div><div class="label">Sheets</div></div>
+      <div class="stat-card"><div class="num slides">${s.stats?.slides ?? 0}</div><div class="label">Slides</div></div>
       <div class="stat-card"><div class="num">${s.stats?.links_found ?? 0}</div><div class="label">連結追蹤</div></div>
       <div class="stat-card"><div class="num err">${s.stats?.errors ?? 0}</div><div class="label">錯誤</div></div>
     `;
@@ -192,7 +195,10 @@ async function update() {
     } else {
       fileList.innerHTML = files.map((f, i) => {
         const isSheet = f.type?.includes('sheet');
-        const typeBadge = isSheet
+        const isSlide = f.type?.includes('slide');
+        const typeBadge = isSlide
+          ? '<span class="type-badge slide">Slide</span>'
+          : isSheet
           ? '<span class="type-badge sheet">Sheet</span>'
           : '<span class="type-badge doc">Doc</span>';
         const sizeKB = (f.size / 1024).toFixed(1);

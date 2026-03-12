@@ -1,13 +1,13 @@
 """
-Google Docs/Sheets Harvester — 邊瀏覽邊收割
+Google Docs/Sheets/Slides Harvester — 邊瀏覽邊收割
 
 使用方式：
   python harvester.py --workdir c:/tmp/harvester [--depth N] [--fresh]
 
 1. 開啟 Chrome（帶你的登入狀態）
-2. 瀏覽任何 Google Doc / Sheet 時自動擷取內容
-3. 頁面內的 Google Doc/Sheet 連結會自動排入佇列背景爬取
-4. 所有內容存為 Markdown / CSV 到 output 資料夾
+2. 瀏覽任何 Google Doc / Sheet / Slides 時自動擷取內容
+3. 頁面內的 Google Doc/Sheet/Slides 連結會自動排入佇列背景爬取
+4. Docs/Sheets 存為 Markdown / CSV，Slides 存為 PDF
 5. 關閉瀏覽器視窗即結束
 6. 結束後自動產生 _INDEX.md 總清單
 """
@@ -23,8 +23,6 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
 from playwright.async_api import async_playwright, Page, BrowserContext
-import aiohttp
-import yarl
 from markdownify import markdownify as md
 from bs4 import BeautifulSoup
 
@@ -32,10 +30,11 @@ from bs4 import BeautifulSoup
 
 GOOGLE_DOC_PATTERN = re.compile(r'docs\.google\.com/document/d/([a-zA-Z0-9_-]+)')
 GOOGLE_SHEET_PATTERN = re.compile(r'docs\.google\.com/spreadsheets/d/([a-zA-Z0-9_-]+)')
+GOOGLE_SLIDE_PATTERN = re.compile(r'docs\.google\.com/presentation/d/([a-zA-Z0-9_-]+)')
 
 TITLE_SUFFIXES = [
-    ' - Google 文件', ' - Google 試算表',
-    ' - Google Docs', ' - Google Sheets',
+    ' - Google 文件', ' - Google 試算表', ' - Google 簡報',
+    ' - Google Docs', ' - Google Sheets', ' - Google Slides',
 ]
 
 # --------------- State ---------------
@@ -44,11 +43,10 @@ visited: set[str] = set()
 queue: asyncio.Queue = None
 overflow_links: list[dict] = []
 error_log: list[dict] = []
-stats = {"docs": 0, "sheets": 0, "links_found": 0, "errors": 0, "overflow": 0}
+stats = {"docs": 0, "sheets": 0, "slides": 0, "links_found": 0, "errors": 0, "overflow": 0}
 
 output_dir: Path = None
 max_depth: int = 1
-http_session: aiohttp.ClientSession = None
 
 # --------------- Helpers ---------------
 
@@ -67,6 +65,9 @@ def extract_doc_id(url: str) -> tuple[str, str] | None:
     m = GOOGLE_SHEET_PATTERN.search(url)
     if m:
         return m.group(1), 'sheet'
+    m = GOOGLE_SLIDE_PATTERN.search(url)
+    if m:
+        return m.group(1), 'slide'
     return None
 
 
@@ -83,8 +84,10 @@ def extract_google_links(html: str) -> list[tuple[str, str, str]]:
             doc_id, doc_type = info
             if doc_type == 'doc':
                 clean_url = f'https://docs.google.com/document/d/{doc_id}'
-            else:
+            elif doc_type == 'sheet':
                 clean_url = f'https://docs.google.com/spreadsheets/d/{doc_id}'
+            else:
+                clean_url = f'https://docs.google.com/presentation/d/{doc_id}'
             results.append((doc_id, doc_type, clean_url))
     return results
 
@@ -142,34 +145,25 @@ def extract_preview(filepath: Path, max_chars: int = 80) -> str:
 
 # --------------- Core ---------------
 
-async def sync_cookies_from_browser(context: BrowserContext) -> None:
-    """Extract cookies from browser context and inject into aiohttp session."""
-    global http_session
-    cookies = await context.cookies()
-    if http_session and not http_session.closed:
-        await http_session.close()
-    jar = aiohttp.CookieJar(unsafe=True)
-    http_session = aiohttp.ClientSession(cookie_jar=jar)
-    for c in cookies:
-        jar.update_cookies(
-            {c['name']: c['value']},
-            response_url=yarl.URL(f"https://{c['domain'].lstrip('.')}/")
-        )
+async def page_fetch(context: BrowserContext, url: str) -> tuple[int, bytes]:
+    """用 Playwright page 開 URL，取得 status + raw body，自帶完整 browser auth。"""
+    page = await context.new_page()
+    try:
+        resp = await page.goto(url, wait_until='load', timeout=30000)
+        status = resp.status if resp else 0
+        body = await resp.body() if resp else b''
+        return status, body
+    finally:
+        await page.close()
 
 
-async def http_fetch(url: str) -> tuple[int, str]:
-    """Fetch URL using aiohttp with browser cookies."""
-    async with http_session.get(url, allow_redirects=True) as resp:
-        text = await resp.text(errors='replace')
-        return resp.status, text
-
-
-async def capture_doc(doc_id: str, depth: int = 0) -> None:
-    visited.add(doc_id)  # 冪等，caller 可能已加
+async def capture_doc(doc_id: str, depth: int, context: BrowserContext) -> None:
+    visited.add(doc_id)
 
     export_url = f'https://docs.google.com/document/d/{doc_id}/export?format=html'
     try:
-        status, html = await http_fetch(export_url)
+        status, body = await page_fetch(context, export_url)
+        html = body.decode('utf-8', errors='replace')
         if status != 200 or not html:
             print(f'  ✗ Doc {doc_id[:20]}: HTTP {status}')
             error_log.append({"type": "doc", "doc_id": doc_id, "reason": f"HTTP {status}"})
@@ -186,12 +180,10 @@ async def capture_doc(doc_id: str, depth: int = 0) -> None:
     title_tag = soup.find('title')
     title = title_tag.text.strip() if title_tag else ''
     title = clean_title(title)
-    # Fallback 1: heading tag
     if not title or title == doc_id:
         h = soup.find(['h1', 'h2', 'h3'])
         if h:
             title = clean_title(h.get_text(strip=True)[:120])
-    # Fallback 2: 正文第一個非空段落
     if not title or title == doc_id:
         for p in soup.find_all(['p', 'span']):
             text = p.get_text(strip=True)
@@ -201,7 +193,7 @@ async def capture_doc(doc_id: str, depth: int = 0) -> None:
     if not title:
         title = doc_id
 
-    markdown = md(html, heading_style="ATX", strip=['img'])
+    markdown = md(html, heading_style="ATX")
     filename = sanitize_filename(title)
     filepath = safe_filepath(output_dir, filename, '.md')
 
@@ -219,24 +211,24 @@ async def capture_doc(doc_id: str, depth: int = 0) -> None:
     queue_links(html, depth, title, doc_id)
 
 
-async def capture_sheet(doc_id: str, depth: int = 0) -> None:
-    visited.add(doc_id)  # 冪等，caller 可能已加
+async def capture_sheet(doc_id: str, depth: int, context: BrowserContext) -> None:
+    visited.add(doc_id)
 
     # CSV export
     csv_data = None
     try:
         csv_url = f'https://docs.google.com/spreadsheets/d/{doc_id}/export?format=csv'
-        status, csv_data = await http_fetch(csv_url)
-        if status != 200:
-            csv_data = None
+        status, body = await page_fetch(context, csv_url)
+        if status == 200 and body:
+            csv_data = body.decode('utf-8', errors='replace')
     except Exception:
         csv_data = None
 
     # HTML export (for title, links, and markdown conversion)
-    html = None
     try:
         html_url = f'https://docs.google.com/spreadsheets/d/{doc_id}/export?format=html'
-        status, html = await http_fetch(html_url)
+        status, body = await page_fetch(context, html_url)
+        html = body.decode('utf-8', errors='replace')
         if status != 200 or not html:
             print(f'  ✗ Sheet {doc_id[:20]}: HTTP {status}')
             error_log.append({"type": "sheet", "doc_id": doc_id, "reason": f"HTTP {status}"})
@@ -280,6 +272,65 @@ async def capture_sheet(doc_id: str, depth: int = 0) -> None:
     queue_links(html, depth, title, doc_id)
 
 
+async def capture_slide(doc_id: str, depth: int, context: BrowserContext) -> None:
+    visited.add(doc_id)
+
+    # 取標題：開 presentation 頁讀 <title>
+    title = doc_id
+    try:
+        page = await context.new_page()
+        await page.goto(
+            f'https://docs.google.com/presentation/d/{doc_id}/edit',
+            wait_until='domcontentloaded', timeout=15000,
+        )
+        raw_title = await page.title()
+        await page.close()
+        if raw_title:
+            title = clean_title(raw_title.strip())
+    except Exception:
+        try:
+            await page.close()
+        except Exception:
+            pass
+
+    # Export PDF（Slides 無 HTML export）
+    export_url = f'https://docs.google.com/presentation/d/{doc_id}/export/pdf'
+    try:
+        status, body = await page_fetch(context, export_url)
+        if status != 200 or not body:
+            print(f'  ✗ Slide {doc_id[:20]}: HTTP {status}')
+            error_log.append({"type": "slide", "doc_id": doc_id, "reason": f"HTTP {status}"})
+            stats["errors"] += 1
+            return
+    except Exception as e:
+        print(f'  ✗ Slide {doc_id[:20]}: {e}')
+        error_log.append({"type": "slide", "doc_id": doc_id, "reason": str(e)})
+        stats["errors"] += 1
+        return
+
+    if not title or title == doc_id:
+        title = doc_id
+    filename = sanitize_filename(title)
+    filepath = safe_filepath(output_dir, filename, '.pdf')
+
+    with open(filepath, 'wb') as f:
+        f.write(body)
+
+    # 同時存一個 .md 作為索引用 frontmatter
+    md_path = safe_filepath(output_dir, filename, '.md')
+    with open(md_path, 'w', encoding='utf-8') as f:
+        f.write(f'---\n')
+        f.write(f'source: https://docs.google.com/presentation/d/{doc_id}\n')
+        f.write(f'title: "{title}"\n')
+        f.write(f'type: google-slide\n')
+        f.write(f'harvested: "{time.strftime("%Y-%m-%d %H:%M:%S")}"\n')
+        f.write(f'---\n\n')
+        f.write(f'PDF 已匯出：[{filepath.name}](./{filepath.name})\n')
+
+    stats["slides"] += 1
+    print(f'  ✓ Slide: {title} → {filepath.name}')
+
+
 async def background_worker(context: BrowserContext) -> None:
     """Background worker: processes queued links via aiohttp."""
     while True:
@@ -296,9 +347,11 @@ async def background_worker(context: BrowserContext) -> None:
 
         print(f'  ⟳ Background (depth {depth}): {url}')
         if doc_type == 'doc':
-            await capture_doc(doc_id, depth)
+            await capture_doc(doc_id, depth, context)
+        elif doc_type == 'sheet':
+            await capture_sheet(doc_id, depth, context)
         else:
-            await capture_sheet(doc_id, depth)
+            await capture_slide(doc_id, depth, context)
         queue.task_done()
         await asyncio.sleep(0.5)
 
@@ -315,14 +368,15 @@ async def on_page_navigate(page: Page) -> None:
     visited.add(doc_id)  # 立即佔位，防 race condition（在 await 之前）
 
     print(f'\n📄 偵測到: {url}')
-    await sync_cookies_from_browser(page.context)
 
     if doc_type == 'doc':
-        await capture_doc(doc_id, depth=0)
+        await capture_doc(doc_id, 0, page.context)
+    elif doc_type == 'sheet':
+        await capture_sheet(doc_id, 0, page.context)
     else:
-        await capture_sheet(doc_id, depth=0)
+        await capture_slide(doc_id, 0, page.context)
 
-    print(f'  📊 已收割: {stats["docs"]} docs, {stats["sheets"]} sheets | '
+    print(f'  📊 已收割: {stats["docs"]} docs, {stats["sheets"]} sheets, {stats["slides"]} slides | '
           f'佇列: {stats["links_found"]} | 錯誤: {stats["errors"]}')
 
 
@@ -330,6 +384,7 @@ def generate_index(out_dir: Path) -> None:
     """掃描 output 目錄，產生 _INDEX.md 總清單"""
     docs = []
     sheets = []
+    slides = []
 
     for f in sorted(out_dir.glob('*.md')):
         if f.name.startswith('_'):
@@ -352,6 +407,8 @@ def generate_index(out_dir: Path) -> None:
 
             if 'sheet' in meta["type"]:
                 sheets.append(meta)
+            elif 'slide' in meta["type"]:
+                slides.append(meta)
             else:
                 docs.append(meta)
         except Exception:
@@ -359,9 +416,10 @@ def generate_index(out_dir: Path) -> None:
 
     lines = []
     lines.append('# 收割總清單\n')
+    total = len(docs) + len(sheets) + len(slides)
     lines.append(f'> 收割時間：{time.strftime("%Y-%m-%d %H:%M")} | '
-                 f'共 {len(docs) + len(sheets)} 份文件'
-                 f'（{len(docs)} Docs + {len(sheets)} Sheets）\n')
+                 f'共 {total} 份文件'
+                 f'（{len(docs)} Docs + {len(sheets)} Sheets + {len(slides)} Slides）\n')
 
     if docs:
         lines.append('\n## Google Docs\n')
@@ -376,6 +434,14 @@ def generate_index(out_dir: Path) -> None:
         lines.append('| # | 標題 | 摘要 | 來源 |')
         lines.append('|---|------|------|------|')
         for i, d in enumerate(sheets, 1):
+            src = f'[開啟]({d["source"]})' if d["source"] else ''
+            lines.append(f'| {i} | {d["title"]} | {d["preview"]} | {src} |')
+
+    if slides:
+        lines.append('\n## Google Slides\n')
+        lines.append('| # | 標題 | 摘要 | 來源 |')
+        lines.append('|---|------|------|------|')
+        for i, d in enumerate(slides, 1):
             src = f'[開啟]({d["source"]})' if d["source"] else ''
             lines.append(f'| {i} | {d["title"]} | {d["preview"]} | {src} |')
 
@@ -480,10 +546,9 @@ async def main():
             args=['--disable-blink-features=AutomationControlled'],
         )
 
-        # Initial cookie sync
+        # 開 Google Docs 首頁確認登入
         init_page = context.pages[0] if context.pages else await context.new_page()
         await init_page.goto('https://docs.google.com', wait_until='domcontentloaded')
-        await sync_cookies_from_browser(context)
 
         # Background worker
         worker_task = asyncio.create_task(background_worker(context))
@@ -526,10 +591,6 @@ async def main():
         except asyncio.CancelledError:
             pass
 
-    # Cleanup HTTP session
-    if http_session and not http_session.closed:
-        await http_session.close()
-
     # Generate index
     generate_index(output_dir)
 
@@ -538,6 +599,7 @@ async def main():
     print(' 收割完成！')
     print(f' Docs:     {stats["docs"]}')
     print(f' Sheets:   {stats["sheets"]}')
+    print(f' Slides:   {stats["slides"]}')
     print(f' Overflow: {stats["overflow"]}')
     print(f' Errors:   {stats["errors"]}')
     print(f' Output:   {output_dir.resolve()}')

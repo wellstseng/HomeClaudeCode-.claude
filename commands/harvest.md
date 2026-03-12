@@ -1,6 +1,6 @@
-# /harvest — Google Docs/Sheets 收割工具
+# /harvest — Google Docs/Sheets/Slides 收割工具
 
-> 啟動 Playwright Chrome 瀏覽器，邊瀏覽邊自動收割 Google Docs/Sheets 為 Markdown/CSV。
+> 啟動 Playwright Chrome 瀏覽器，邊瀏覽邊自動收割 Google Docs/Sheets/Slides 為 Markdown/CSV/PDF。
 > 工具位於 `~/.claude/tools/gdoc-harvester/`。
 
 ---
@@ -34,9 +34,10 @@
   /harvest start --fresh  ← 重新複製 Chrome 登入狀態
 
 功能：
-  啟動 Chrome 瀏覽器，邊瀏覽邊自動收割 Google Docs/Sheets。
+  啟動 Chrome 瀏覽器，邊瀏覽邊自動收割 Google Docs/Sheets/Slides。
   - Google Docs → Markdown (.md)
   - Google Sheets → CSV + Markdown
+  - Google Slides → PDF + Markdown（索引）
   - 文件內連結自動追蹤（可設深度）
   - 結束後自動產生 _INDEX.md 總清單
 
@@ -128,9 +129,15 @@ Agent 回報結果後：
 
 ---
 
+## 內部網站登入
+
+如需存取 GitLab 等內部網站，首次請在收割瀏覽器中手動登入。
+Playwright persistent context 會記住登入狀態，下次啟動（不加 `--fresh`）無需重新登入。
+
 ## 已知限制
 
 - 首次使用或 `--fresh` 需關閉 Chrome 以複製 cookies
 - 部分 Google Workspace 文件可能因帳號權限不同而匯出失敗
 - 同一 doc_id 只會收割一次（跨 URL fragment 去重）
 - Sheet export 目前只匯出第一個 tab（後續改善項目）
+- Slides 匯出為 PDF（無 HTML export），不會提取頁面內連結
