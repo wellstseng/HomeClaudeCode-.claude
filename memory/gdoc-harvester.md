@@ -28,6 +28,23 @@ type: project
 6. **framenavigated race condition** — 同一 doc_id 多次觸發
    - 解法: `on_page_navigate` 在第一個 await 前 `visited.add(doc_id)` 佔位
 
+7. **capture_doc/sheet 自殺 bug** — on_page_navigate 已加 visited，capture 又 `if in visited: return`
+   - 解法: 移除 capture 的 early return，只保留冪等 `visited.add()`
+
+8. **標題抓取失敗** — Google export HTML 的 `<title>` 常空或只有 doc_id
+   - 解法: 多層 fallback: `<title>` → h1/h2/h3 → 第一段文字 → doc_id
+
+9. **Sheets export 全部 401/400** — aiohttp cookie 同步可能不足
+   - 狀態: **未解決**。所有 Sheet 都 401 或 400，Doc 部分也有 401（可能是不同帳號的文件）
+   - 可能原因: Sheets API 需要的 auth token 不在一般 cookies 裡，或需要 SAPISIDHASH header
+
+10. **GitLab 登入無法持續** — copytree 完整 profile 後仍無法登入，或關 tab 後被踢
+    - 狀態: **未解決**。嘗試了 copytree 整個 Default profile（含 Local Storage、IndexedDB），仍失敗
+    - 可能原因: CSRF token 時效、session cookie 綁定 IP/fingerprint、或 Playwright persistent context 的 storage 機制與原生 Chrome 不完全相容
+
+11. **Google Slides 不支援** — 只偵測 document/d/ 和 spreadsheets/d/
+    - 狀態: **未實作**。需加 presentation/d/ pattern + export（PDF/PPTX，無 HTML export）
+
 ### 架構
 
 - Playwright Chrome (persistent context) → 使用者瀏覽

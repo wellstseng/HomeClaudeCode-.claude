@@ -165,9 +165,7 @@ async def http_fetch(url: str) -> tuple[int, str]:
 
 
 async def capture_doc(doc_id: str, depth: int = 0) -> None:
-    if doc_id in visited:
-        return
-    visited.add(doc_id)
+    visited.add(doc_id)  # 冪等，caller 可能已加
 
     export_url = f'https://docs.google.com/document/d/{doc_id}/export?format=html'
     try:
@@ -183,15 +181,25 @@ async def capture_doc(doc_id: str, depth: int = 0) -> None:
         stats["errors"] += 1
         return
 
-    # Title
+    # Title — 多層 fallback
     soup = BeautifulSoup(html, 'html.parser')
     title_tag = soup.find('title')
-    title = title_tag.text.strip() if title_tag else doc_id
+    title = title_tag.text.strip() if title_tag else ''
     title = clean_title(title)
-    if title == doc_id:
+    # Fallback 1: heading tag
+    if not title or title == doc_id:
         h = soup.find(['h1', 'h2', 'h3'])
         if h:
             title = clean_title(h.get_text(strip=True)[:120])
+    # Fallback 2: 正文第一個非空段落
+    if not title or title == doc_id:
+        for p in soup.find_all(['p', 'span']):
+            text = p.get_text(strip=True)
+            if text and len(text) > 2:
+                title = clean_title(text[:120])
+                break
+    if not title:
+        title = doc_id
 
     markdown = md(html, heading_style="ATX", strip=['img'])
     filename = sanitize_filename(title)
@@ -212,9 +220,7 @@ async def capture_doc(doc_id: str, depth: int = 0) -> None:
 
 
 async def capture_sheet(doc_id: str, depth: int = 0) -> None:
-    if doc_id in visited:
-        return
-    visited.add(doc_id)
+    visited.add(doc_id)  # 冪等，caller 可能已加
 
     # CSV export
     csv_data = None
@@ -437,15 +443,19 @@ async def main():
         shutil.rmtree(browser_data)
 
     if not dst_default.exists():
-        print(' ⟳ 複製 Chrome 登入狀態...')
+        print(' ⟳ 複製 Chrome 登入狀態（完整 profile）...')
         browser_data.mkdir(parents=True, exist_ok=True)
         src_default = chrome_src / 'Default'
-        dst_default.mkdir(parents=True, exist_ok=True)
-        for fname in ['Cookies', 'Login Data', 'Web Data', 'Preferences',
-                       'Secure Preferences', 'Local State']:
-            src_file = src_default / fname
-            if src_file.exists():
-                shutil.copy2(src_file, dst_default / fname)
+        # 完整複製 Default profile（含 Local Storage、IndexedDB 等）
+        # 排除 Cache 等大型不必要目錄
+        skip_dirs = {'Cache', 'Code Cache', 'GPUCache', 'Service Worker',
+                     'File System', 'blob_storage', 'BudgetDatabase'}
+        shutil.copytree(
+            src_default, dst_default,
+            ignore=lambda d, files: [f for f in files if f in skip_dirs],
+            dirs_exist_ok=True,
+        )
+        # Local State（加密 key）放在 User Data 根目錄
         local_state = chrome_src / 'Local State'
         if local_state.exists():
             shutil.copy2(local_state, browser_data / 'Local State')
