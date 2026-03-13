@@ -1629,44 +1629,6 @@ def _find_session_transcript(session_id: str, cwd: str) -> Optional[Path]:
     return None
 
 
-def _extract_last_assistant_text(transcript_path: Path, max_chars: int = 3000) -> str:
-    """Extract the last assistant text response from a JSONL transcript.
-
-    Reads from end, skips thinking/tool_use blocks, returns text only.
-    """
-    try:
-        with open(transcript_path, "r", encoding="utf-8") as f:
-            lines_raw = f.readlines()
-    except (OSError, UnicodeDecodeError):
-        return ""
-
-    # Scan from end to find last assistant message with text content
-    for raw_line in reversed(lines_raw):
-        try:
-            obj = json.loads(raw_line)
-        except json.JSONDecodeError:
-            continue
-        if obj.get("type") != "assistant":
-            continue
-        content = obj.get("message", {}).get("content", [])
-        if not isinstance(content, list):
-            continue
-        texts = []
-        total = 0
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "text":
-                t = block.get("text", "")
-                if t:
-                    texts.append(t)
-                    total += len(t)
-                    if total >= max_chars:
-                        break
-        if texts:
-            combined = "\n".join(texts)
-            return combined[:max_chars]
-    return ""
-
-
 def _extract_all_assistant_texts(transcript_path: Path, max_chars: int = 20000) -> List[str]:
     """Extract all assistant text responses from a JSONL transcript (for SessionEnd)."""
     texts = []
@@ -1798,38 +1760,6 @@ def _llm_extract_knowledge(text: str, existing_queue: List[dict],
         existing_fingerprints.add(content[:40].lower())
 
     return results
-
-
-def _async_extract_last_response(session_id: str, cwd: str, config: dict) -> None:
-    """Background thread: extract knowledge from last assistant response → write to state."""
-    try:
-        transcript = _find_session_transcript(session_id, cwd)
-        if not transcript:
-            return
-
-        rc = config.get("response_capture", {})
-        max_chars = rc.get("per_turn_max_chars", 3000)
-        min_chars = rc.get("per_turn_min_response_chars", 100)
-
-        text = _extract_last_assistant_text(transcript, max_chars=max_chars)
-        if not text or len(text) < min_chars:
-            return
-
-        state = read_state(session_id)
-        if not state:
-            return
-        existing = state.get("knowledge_queue", [])
-        items = _llm_extract_knowledge(text, existing, source="per-turn")
-        if items:
-            # Re-read state for freshness (avoid race condition)
-            state = read_state(session_id)
-            if not state:
-                return
-            state["pending_extraction"] = items
-            write_state(session_id, state)
-            print(f"[v2.4] Per-turn extraction: {len(items)} items", file=sys.stderr)
-    except Exception as e:
-        print(f"[v2.4] Per-turn extraction error: {e}", file=sys.stderr)
 
 
 # ─── V2.4 Phase 3: Cross-Session Pattern Consolidation ────────────────────
@@ -2459,37 +2389,16 @@ def handle_session_end(input_data: Dict[str, Any], config: Dict[str, Any]) -> No
         except Exception as e:
             print(f"[v2.8] Wisdom reflect error: {e}", file=sys.stderr)
 
-    # ─── V2.11: Write over_engineering_rate to reflection_metrics ────
+    # ─── V2.11: over_engineering 統計已由 wisdom_reflect(state) 統一處理 ────
+    # （track_retry 累計 wisdom_retry_count → reflect() 寫入 reflection_metrics）
     try:
         edit_counts = state.get("edit_counts", {})
         if edit_counts:
             reverted = sum(1 for c in edit_counts.values() if c >= 2)
-            total = len(edit_counts) or 1
-            oe_rate = round(reverted / total, 3)
-            metrics_path = MEMORY_DIR / "wisdom" / "reflection_metrics.json"
-            if metrics_path.exists():
-                try:
-                    metrics_data = json.loads(metrics_path.read_text(encoding="utf-8"))
-                except (json.JSONDecodeError, OSError):
-                    metrics_data = {}
-            else:
-                metrics_data = {}
-            metrics_data["over_engineering_rate"] = oe_rate
-            metrics_data["over_engineering_detail"] = {
-                "reverted_files": reverted,
-                "total_edited_files": total,
-                "session": session_id[:8],
-                "at": _now_iso(),
-            }
-            metrics_path.parent.mkdir(parents=True, exist_ok=True)
-            metrics_path.write_text(
-                json.dumps(metrics_data, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
             if reverted > 0:
                 print(
-                    f"[v2.11] Over-engineering: {reverted}/{total} files "
-                    f"edited 2+ times (rate={oe_rate})",
+                    f"[v2.11] Over-engineering: {reverted}/{len(edit_counts)} files "
+                    f"edited 2+ times",
                     file=sys.stderr,
                 )
     except Exception as e:

@@ -158,7 +158,9 @@ def reflect(state: Dict[str, Any]) -> None:
         sa["held_back_ok"] = sa.pop("held_back_and_user_didnt_ask", 0)
         sa["held_back_missed"] = sa.pop("held_back_but_user_needed", 0)
         sa.pop("spoke_but_user_ignored", None)
-    if _last_approach == "direct":
+    # 用 state 保存的 approach（跨 process 持久），不用 module-level _last_approach
+    session_approach = approach  # 已從 state["wisdom_approach"] 取得
+    if session_approach == "direct":
         if retry_count == 0:
             sa["held_back_ok"] += 1
         else:
@@ -193,9 +195,5 @@ def track_retry(state: Dict[str, Any], file_path: str) -> None:
     count = sum(1 for m in edits if m.get("path", "").replace("\\", "/") == norm)
     if count >= 2:
         state["wisdom_retry_count"] = state.get("wisdom_retry_count", 0) + 1
-        # V2.11: update over_engineering_rate (revert signal)
-        metrics = _load_json(REFLECTION_PATH, _empty_reflection())
-        oe = metrics.setdefault("metrics", {}).setdefault("over_engineering_rate",
-             {"user_reverted_or_simplified": 0, "total_suggestions": 0})
-        oe["user_reverted_or_simplified"] += 1
-        _save_json(REFLECTION_PATH, metrics)
+        # V2.11: 只更新 state 計數，由 SessionEnd reflect() 統一寫入 reflection_metrics
+        # （避免 PostToolUse 與 SessionEnd 雙寫 JSON 競爭）

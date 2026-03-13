@@ -8,7 +8,7 @@
 | decisions | memory/decisions.md | 全域決策, 工具, 工作流, workflow, guardian, hooks, MCP, 記憶系統 | [固] |
 | excel-tools | memory/excel-tools.md | Excel, xls, xlsx, 讀取, 試算表, spreadsheet, openpyxl, xlrd | [固] |
 | workflow-rules | memory/workflow-rules.md | svn, svn-update, 版本控制, 同步, vcs | [固] |
-| failures | memory/failures.md | 失敗, pitfall, 陷阱, bug, 踩坑, debug | [觀] |
+| failures | memory/failures.md | 失敗, pitfall, 陷阱, bug, 踩坑, debug | [固] |
 | toolchain | memory/toolchain.md | 工具鏈, toolchain, Ollama, qwen3, vector, LanceDB | [觀] |
 | unity-yaml | memory/unity/unity-yaml.md | Unity YAML, fileID, GUID, PrefabInstance, .prefab, .meta, 型別ID, 序列化, Missing Script | [固] |
 | gdoc-harvester | memory/gdoc-harvester.md | harvester, Google Docs, Sheets, 收割, Playwright, cookie, export, aiohttp | [觀] |

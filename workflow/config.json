@@ -102,7 +102,7 @@
   },
   "response_capture": {
     "enabled": true,
-    "per_turn_enabled": true,
+    "per_turn_enabled": false,
     "per_turn_max_chars": 3000,
     "per_turn_max_items": 2,
     "per_turn_min_response_chars": 100,

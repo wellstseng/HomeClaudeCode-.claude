@@ -4,7 +4,7 @@
 - Confidence: [固]
 - Trigger: 工具, 環境, 指令, command, path, 路徑, bash, git, python, npm, ollama
 - Last-used: 2026-03-13
-- Confirmations: 22
+- Confirmations: 24
 - Type: procedural
 - Tags: toolchain, environment, commands
 - Related: failures
@@ -30,7 +30,7 @@
 - [觀] Python: Windows 預設路徑 — 需確認具體 session 中的 `which python` 結果
 - [觀] Node.js: 用於 inbox-check.js hook — 需確認版本
 - [固] Ollama models 位置: 預設 `~/.ollama/models/`
-- [固] ChromaDB 資料: `~/.claude/memory/_vectordb/`
+- [固] LanceDB 資料: `~/.claude/memory/_vectordb/`
 
 ### Ollama Dual-Backend（rdchat + local）
 
