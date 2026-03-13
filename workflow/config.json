@@ -26,7 +26,7 @@
           "password_file": "~/.claude/workflow/.rdchat_password"
         },
         "llm_model": "qwen3.5:latest",
-        "embedding_model": "qwen3-embedding",
+        "embedding_model": "qwen3-embedding:latest",
         "priority": 1
       },
       "local": {

@@ -131,14 +131,24 @@ class OllamaClient:
 
     def embed(self, texts: List[str], model: str = None,
               timeout: int = 60) -> List[List[float]]:
-        """POST /api/embed — 替換 OllamaEmbedder"""
+        """POST embedding request.
+
+        Uses /api/embed (Ollama native) for direct backends,
+        /api/v1/embeddings (OpenAI-compatible) for Open WebUI proxied backends.
+        Open WebUI's OpenAI endpoint is at root (not under /ollama/ proxy path).
+        """
         backend = self._pick_backend("embedding")
         if not backend:
             return []
-        payload = {
-            "model": model or backend.embedding_model,
-            "input": texts,
-        }
+        emb_model = model or backend.embedding_model
+        if backend.auth:
+            # Open WebUI: try OpenAI-compatible endpoint first
+            # Strip /ollama proxy prefix to get OWU root URL
+            result = self._owu_embed(backend, emb_model, texts, timeout)
+            if result is not None:
+                return result
+            # Fallback: try Ollama native through proxy
+        payload = {"model": emb_model, "input": texts}
         result = self._request_with_failover(
             "embedding", "/api/embed", payload, timeout,
             explicit_model=model,
@@ -146,6 +156,36 @@ class OllamaClient:
         if result is None:
             return []
         return result.get("embeddings", [])
+
+    def _owu_embed(self, backend: OllamaBackend, model: str,
+                   texts: List[str], timeout: int) -> Optional[List[List[float]]]:
+        """Embed via Open WebUI's OpenAI-compatible /api/v1/embeddings."""
+        base = backend.base_url.rstrip("/")
+        # Strip Ollama proxy path to get OWU root
+        for suffix in ("/ollama", "/ollama/"):
+            if base.endswith(suffix.rstrip("/")):
+                base = base[:-len(suffix.rstrip("/"))]
+                break
+        url = base + "/api/v1/embeddings"
+        payload = json.dumps({"model": model, "input": texts}).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        token = self._ensure_auth(backend)
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        try:
+            ctx = None
+            if url.startswith("https"):
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+            req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+                data = json.loads(resp.read())
+                return [item["embedding"] for item in data.get("data", [])
+                        if "embedding" in item]
+        except Exception as e:
+            logger.warning("[%s] OWU embed failed: %s", backend.name, e)
+            return None
 
     def is_available(self, need: str = "llm") -> bool:
         """Check if any backend with the needed capability is reachable."""
