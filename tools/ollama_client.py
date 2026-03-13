@@ -50,6 +50,7 @@ class OllamaBackend:
     llm_model: Optional[str] = None
     embedding_model: Optional[str] = None
     priority: int = 99
+    enabled: bool = True  # 靜態旗標：false 時完全跳過此 backend
 
 
 @dataclass
@@ -281,6 +282,8 @@ class OllamaClient:
         for backend in self._backends:
             if backend.name in exclude:
                 continue
+            if not backend.enabled:
+                continue
 
             # Check capability
             if need == "embedding" and not backend.embedding_model:
@@ -326,6 +329,7 @@ class OllamaClient:
         state = self._get_state(backend)
         if state.status != "normal":
             logger.info("[%s] recovered → normal", backend.name)
+            self._clear_long_die_marker()
         self._reset_state(backend)
         # Also refresh health cache
         self._health_cache[backend.name] = (True, time.time())
@@ -355,6 +359,7 @@ class OllamaClient:
                     state.long_die_until = _next_time_boundary()
                     until_str = datetime.fromtimestamp(state.long_die_until).strftime("%H:%M")
                     logger.warning("[%s] → long_die until %s", backend.name, until_str)
+                    self._write_long_die_marker(backend, until_str)
                 else:
                     # 10-minute window expired, reset short_die counters
                     state.short_die_count = 1
@@ -369,6 +374,7 @@ class OllamaClient:
                     state.long_die_until = _next_time_boundary()
                     until_str = datetime.fromtimestamp(state.long_die_until).strftime("%H:%M")
                     logger.warning("[%s] → long_die until %s", backend.name, until_str)
+                    self._write_long_die_marker(backend, until_str)
 
     def _get_state(self, backend: OllamaBackend) -> BackendState:
         if backend.name not in self._state:
@@ -571,6 +577,104 @@ class OllamaClient:
         except OSError:
             pass
 
+    # -----------------------------------------------------------------------
+    # Long DIE marker (向使用者確認是否永久停用)
+    # -----------------------------------------------------------------------
+
+    LONG_DIE_MARKER = CLAUDE_DIR / "workflow" / ".backend_long_die.json"
+
+    @staticmethod
+    def _write_long_die_marker(backend: 'OllamaBackend', until_str: str):
+        """Write marker when long_die triggers — hooks/sessions ask user to disable."""
+        try:
+            OllamaClient.LONG_DIE_MARKER.parent.mkdir(parents=True, exist_ok=True)
+            OllamaClient.LONG_DIE_MARKER.write_text(json.dumps({
+                "type": "long_die",
+                "backend": backend.name,
+                "until": until_str,
+                "message": (
+                    f"遠端 Ollama ({backend.name}) 連續失敗，已進入長期停用狀態"
+                    f"（等到 {until_str} 才重試）。是否要永久停用此 backend？"
+                    f"（可在 config.json 的 ollama_backends.{backend.name}.enabled 手動重新啟用）"
+                ),
+                "created_at": datetime.now().isoformat(timespec="seconds"),
+            }, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+    @staticmethod
+    def _clear_long_die_marker():
+        try:
+            OllamaClient.LONG_DIE_MARKER.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def check_long_die_status() -> Optional[Dict[str, str]]:
+    """Check if a backend entered long_die and needs user decision.
+
+    Returns None if no pending decision, or a dict with:
+      {"type": "long_die", "backend": ..., "until": ..., "message": ...}
+
+    After user decides, call disable_backend() or clear the marker.
+    """
+    marker = OllamaClient.LONG_DIE_MARKER
+    if marker.exists():
+        try:
+            return json.loads(marker.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return None
+
+
+def disable_backend(backend_name: str) -> bool:
+    """Permanently disable a backend by setting enabled=false in config.json."""
+    if not CONFIG_PATH.exists():
+        return False
+    try:
+        config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        backends = config.get("vector_search", {}).get("ollama_backends", {})
+        if backend_name not in backends:
+            return False
+        backends[backend_name]["enabled"] = False
+        CONFIG_PATH.write_text(
+            json.dumps(config, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        # Clear marker + reset singleton so next get_client() picks up change
+        OllamaClient._clear_long_die_marker()
+        global _client_instance
+        _client_instance = None
+        logger.info("[%s] permanently disabled in config", backend_name)
+        return True
+    except (json.JSONDecodeError, OSError, KeyError) as e:
+        logger.error("Failed to disable backend %s: %s", backend_name, e)
+        return False
+
+
+def enable_backend(backend_name: str) -> bool:
+    """Re-enable a previously disabled backend."""
+    if not CONFIG_PATH.exists():
+        return False
+    try:
+        config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        backends = config.get("vector_search", {}).get("ollama_backends", {})
+        if backend_name not in backends:
+            return False
+        backends[backend_name]["enabled"] = True
+        CONFIG_PATH.write_text(
+            json.dumps(config, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        OllamaClient._clear_long_die_marker()
+        global _client_instance
+        _client_instance = None
+        logger.info("[%s] re-enabled in config", backend_name)
+        return True
+    except (json.JSONDecodeError, OSError, KeyError) as e:
+        logger.error("Failed to enable backend %s: %s", backend_name, e)
+        return False
+
 
 # ---------------------------------------------------------------------------
 # Time boundary helper
@@ -611,6 +715,7 @@ def _build_backends_from_config(config: dict) -> List[OllamaBackend]:
                 llm_model=cfg.get("llm_model"),
                 embedding_model=cfg.get("embedding_model"),
                 priority=cfg.get("priority", 99),
+                enabled=cfg.get("enabled", True),
             ))
         return backends
 
