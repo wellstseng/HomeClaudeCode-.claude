@@ -51,6 +51,8 @@ class OllamaBackend:
     embedding_model: Optional[str] = None
     priority: int = 99
     enabled: bool = True  # 靜態旗標：false 時完全跳過此 backend
+    think: bool = False  # 此 backend 的 LLM 是否支援/啟用 thinking mode
+    llm_num_predict: int = 2048  # 此 backend 的 LLM num_predict 預設值
 
 
 @dataclass
@@ -83,29 +85,35 @@ class OllamaClient:
 
     def generate(self, prompt: str, model: str = None,
                  timeout: int = 120, format: str = None,
-                 think: bool = False, **options) -> str:
+                 think=False, **options) -> str:
         """LLM text generation. Internally uses /api/chat.
 
-        think=False (default): fast, no reasoning tokens — 適合短 prompt.
-        think=True: 啟用 reasoning，適合長 prompt 萃取等需要深度處理的場景。
-        不支援 think 的模型（如 qwen3:1.7b）會自動忽略此參數。
+        think=False: no reasoning tokens.
+        think=True: 啟用 reasoning.
+        think="auto": 依 backend config 自動決定（rdchat=True, local=False）.
         """
         backend = self._pick_backend("llm")
         if not backend:
             return ""
+        # think="auto" → 依 backend 設定決定
+        effective_think = backend.think if think == "auto" else think
         payload: Dict[str, Any] = {
             "model": model or backend.llm_model,
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
-            "think": think,
+            "think": effective_think,
         }
         if format:
             payload["format"] = format
+        # think="auto" 時，也套用 backend 的 num_predict（除非呼叫端已指定）
+        if think == "auto" and "num_predict" not in options:
+            options["num_predict"] = backend.llm_num_predict
         if options:
             payload["options"] = options
         result = self._request_with_failover(
             "llm", "/api/chat", payload, timeout,
             explicit_model=model,
+            auto_think=think == "auto",
         )
         if result is None:
             return ""
@@ -203,12 +211,15 @@ class OllamaClient:
 
     def _request_with_failover(self, need: str, endpoint: str,
                                payload: dict, timeout: int,
-                               explicit_model: str = None) -> Optional[dict]:
+                               explicit_model: str = None,
+                               auto_think: bool = False) -> Optional[dict]:
         """Try backends in priority order, with failover on failure.
 
         When explicit_model is None, model field is updated per-backend
         to match each backend's configured model (fixes failover using
         wrong model name on fallback backend).
+
+        auto_think=True: failover 時也依 backend config 調整 think + num_predict.
         """
         tried = set()
         while True:
@@ -216,14 +227,26 @@ class OllamaClient:
             if not backend:
                 return None
             tried.add(backend.name)
-            # Adjust model for this backend (unless caller specified explicit model)
             actual_payload = payload
+            needs_copy = False
+            # Adjust model for this backend (unless caller specified explicit model)
             if not explicit_model and "model" in payload:
                 model_attr = "embedding_model" if need == "embedding" else "llm_model"
                 backend_model = getattr(backend, model_attr, None)
                 if backend_model and payload["model"] != backend_model:
-                    actual_payload = dict(payload)
+                    if not needs_copy:
+                        actual_payload = dict(payload)
+                        needs_copy = True
                     actual_payload["model"] = backend_model
+            # auto_think: adjust think + num_predict per backend
+            if auto_think:
+                if not needs_copy:
+                    actual_payload = dict(payload)
+                    needs_copy = True
+                actual_payload["think"] = backend.think
+                opts = dict(actual_payload.get("options", {}))
+                opts["num_predict"] = backend.llm_num_predict
+                actual_payload["options"] = opts
             result = self._do_request(backend, endpoint, actual_payload, timeout)
             if result is not None:
                 self._record_success(backend)
@@ -721,6 +744,8 @@ def _build_backends_from_config(config: dict) -> List[OllamaBackend]:
                 embedding_model=cfg.get("embedding_model"),
                 priority=cfg.get("priority", 99),
                 enabled=cfg.get("enabled", True),
+                think=cfg.get("think", False),
+                llm_num_predict=cfg.get("llm_num_predict", 2048),
             ))
         return backends
 

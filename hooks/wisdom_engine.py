@@ -129,14 +129,16 @@ def reflect(state: Dict[str, Any]) -> None:
     faa = m.setdefault("first_approach_accuracy", {})
 
     # ── first_approach_accuracy ──
+    # 用 Wisdom classify_situation 的結果判定任務類型，而非純看檔案數
+    approach = state.get("wisdom_approach", "direct")
     mod_files = state.get("modified_files", [])
     file_count = len(set(m_item.get("path", "") for m_item in mod_files))
-    if file_count <= 1:
-        task_type = "single_file"
-    elif file_count <= 4:
-        task_type = "multi_file"
-    else:
+    if approach == "plan":
         task_type = "architecture"
+    elif file_count <= 1:
+        task_type = "single_file"
+    else:
+        task_type = "multi_file"
 
     bucket = faa.setdefault(task_type, {"correct": 0, "total": 0})
     bucket["total"] += 1
@@ -151,6 +153,11 @@ def reflect(state: Dict[str, Any]) -> None:
 
     # ── silence_accuracy (V2.11) ──
     sa = m.setdefault("silence_accuracy", {"held_back_ok": 0, "held_back_missed": 0})
+    # 遷移舊 key（held_back_and_user_didnt_ask → held_back_ok 等）
+    if "held_back_ok" not in sa:
+        sa["held_back_ok"] = sa.pop("held_back_and_user_didnt_ask", 0)
+        sa["held_back_missed"] = sa.pop("held_back_but_user_needed", 0)
+        sa.pop("spoke_but_user_ignored", None)
     if _last_approach == "direct":
         if retry_count == 0:
             sa["held_back_ok"] += 1

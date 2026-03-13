@@ -41,13 +41,17 @@
         "llm_model": "qwen3.5:latest",
         "embedding_model": "qwen3-embedding:latest",
         "priority": 1,
-        "enabled": true
+        "enabled": true,
+        "think": true,
+        "llm_num_predict": 8192
       },
       "local": {
         "base_url": "http://127.0.0.1:11434",
         "llm_model": "qwen3:1.7b",
         "embedding_model": "qwen3-embedding",
-        "priority": 2
+        "priority": 2,
+        "think": false,
+        "llm_num_predict": 2048
       }
     },
     "search_top_k": 5,

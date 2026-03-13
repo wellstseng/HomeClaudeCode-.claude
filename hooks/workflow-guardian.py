@@ -1081,6 +1081,12 @@ def handle_user_prompt_submit(
             result = classify_situation(prompt_analysis)
             if result.get("inject"):
                 lines.append(result["inject"])
+            # 記錄最高 approach 供 SessionEnd reflect() 使用
+            cur = result.get("approach", "direct")
+            prev = state.get("wisdom_approach", "direct")
+            rank = {"direct": 0, "confirm": 1, "plan": 2}
+            if rank.get(cur, 0) > rank.get(prev, 0):
+                state["wisdom_approach"] = cur
         except Exception as e:
             print(f"[v2.8] Wisdom prompt error: {e}", file=sys.stderr)
 
@@ -1699,10 +1705,11 @@ def _call_ollama_generate(prompt: str, model: str = None,
     """
     try:
         client = get_client()
+        # think="auto" → rdchat: think=True + 8192, local: think=False + 2048
         # 不用 format="json" — qwen3.5 thinking mode 與 JSON constrained decoding 衝突
         return client.generate(
             prompt, model=model, timeout=timeout,
-            temperature=0.1, num_predict=2048,
+            temperature=0.1, think="auto",
         )
     except Exception:
         return ""
@@ -1714,8 +1721,7 @@ _EXTRACT_PROMPT_TEMPLATE = (
     "\"type\": \"factual|procedural|architectural|pitfall|decision\"}}]\n\n"
     "只萃取：根因分析、API 行為、架構限制、除錯模式、設定值、環境特有行為。\n"
     "不萃取：程式碼變更、通用程式知識、session 進度、問候語。\n"
-    "沒有值得萃取的內容就輸出 []。直接輸出 JSON。\n"
-    "/no_think\n\n"
+    "沒有值得萃取的內容就輸出 []。直接輸出 JSON。\n\n"
     "回應文字:\n{text}\n\nJSON:"
 )
 
