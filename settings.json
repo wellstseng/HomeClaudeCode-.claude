@@ -148,7 +148,7 @@
           {
             "type": "command",
             "command": "python \"C:/Users/holylight/.claude/hooks/workflow-guardian.py\"",
-            "timeout": 3
+            "timeout": 8
           }
         ]
       }
@@ -160,7 +160,7 @@
           {
             "type": "command",
             "command": "python \"C:/Users/holylight/.claude/hooks/workflow-guardian.py\"",
-            "timeout": 3
+            "timeout": 5
           }
         ]
       }
