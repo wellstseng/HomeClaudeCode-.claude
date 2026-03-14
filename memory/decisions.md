@@ -3,8 +3,8 @@
 - Scope: global
 - Confidence: [固]
 - Trigger: 全域決策, 工具, 工作流, workflow, guardian, hooks, MCP, 記憶系統
-- Last-used: 2026-03-13
-- Confirmations: 41
+- Last-used: 2026-03-15
+- Confirmations: 48
 - Type: decision
 
 ## 知識
@@ -45,7 +45,8 @@
 - [固] search_min_score: 0.65（完整版 embedding 精確度足夠）
 - [固] MCP 傳輸格式：JSONL，protocolVersion 2025-11-25
 - [固] _call_ollama_generate: num_predict=2048, timeout=120s（qwen3 thinking mode 需 ~30s on GTX 1650）
-- [固] SessionEnd 萃取由 extract-worker.py detached subprocess 執行（hook timeout=30s，萃取需 ~60s）
+- [固] SessionEnd 萃取由 extract-worker.py detached subprocess 執行（hook timeout=30s，但 Claude Code 硬性上限預設 1.5s，需 env var `CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS=30000` 覆寫）
+- [固] Hook timeout 設定：SessionStart=5s, UserPromptSubmit=8s, PostToolUse=5s, PreCompact=5s, Stop=5s, SessionEnd=30s（需 env var）
 
 ### 自我迭代（V2.6→V2.11）
 - [固] V2.11: 精簡為 3 條核心原則：品質函數（Hook）、證據門檻（Claude）、震盪偵測（Hook）

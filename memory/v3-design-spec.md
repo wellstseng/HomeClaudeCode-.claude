@@ -4,9 +4,9 @@
 - Confidence: [固]
 - Type: design
 - Trigger: V2.9, V3, 設計, 檢索強化, project-alias, ACT-R, multi-hop, blind-spot
-- Last-used: 2026-03-12
+- Last-used: 2026-03-14
 - Created: 2026-03-11
-- Confirmations: 1
+- Confirmations: 2
 - Tags: v2.9, design, retrieval, architecture
 - Related: decisions, spec
 

@@ -3,8 +3,8 @@
 - Scope: global
 - Confidence: [固]
 - Trigger: 自我迭代, self-iteration, 演進原則, 理論背書, 為什麼這樣設計, 設計哲學
-- Last-used: 2026-03-10
-- Confirmations: 1
+- Last-used: 2026-03-15
+- Confirmations: 3
 - Type: knowledge
 - Related: decisions.md, SPEC_Atomic_Memory_System.md
 

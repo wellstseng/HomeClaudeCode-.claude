@@ -3,8 +3,8 @@
 - Scope: global
 - Confidence: [固]
 - Trigger: 失敗, 錯誤, debug, 踩坑, pitfall, crash, 重試, retry, workaround
-- Last-used: 2026-03-14
-- Confirmations: 17
+- Last-used: 2026-03-15
+- Confirmations: 18
 - Type: procedural
 - Tags: failure, pitfall, debug, quality-feedback
 - Related: decisions, toolchain
@@ -22,6 +22,8 @@
 - [臨] VS Code "Open in New Tab" 開 Claude Code 會與側邊欄 CHAT 面板搶焦點 → 點擊/貼上操作進入錯誤面板 → 截圖確認焦點位置 + 點擊新 tab 標題切換焦點後重試（根因: 同視窗兩個 webview 輸入框座標重疊）
 - [臨] 舊 MCP server process 佔住 port 3848 → 新 Guardian routes/cleanup 全不生效 → 先殺舊 process，heartbeat 15s 內自動 rebind（根因: process 未正常退出時 port 不釋放）
 - [固] settings.json hook command 用 `$HOME` 或 `$USERPROFILE` → 跨專案 hook 全不觸發 → 改用硬編碼 `C:/Users/xxx/` 路徑（根因: Git Bash `$HOME=/c/Users/x`(MSYS2格式) Python 解析成 `C:\Program Files\Git\...`；`$USERPROFILE=C:\Users\x` 含反斜線，bash 拼接路徑時展開為空；Python 內部 `Path.home()` 不受影響，只有 bash→Python 命令行參數傳遞有此問題）
+- [臨] UserPromptSubmit hook timeout=3s 太短 → 新 session 第一個 prompt 的 episodic search(1.5s) + semantic search(2s) 累計 >3s → hook 被殺、atom 未注入 → 改 timeout=8s（根因: Claude Code hook 超時直接 kill process，不會輸出已完成的部分；後續 prompt 因跳過 episodic search 所以 <3s 可以通過）
+- [臨] SessionEnd hook `timeout:30` 被 Claude Code 硬性限制覆蓋 → 預設上限僅 1.5s → episodic atom 生成/衝突偵測/wisdom reflect 全部被截斷 → 設 Windows 使用者環境變數 `CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS=30000`（根因: Claude Code 有獨立的 exit-time budget，`per-hook timeout` 被此上限 cap 住，需環境變數覆寫；Issue #33706）
 - [固] MCP server 設定用 `npx.cmd` 在 VSCode 子進程中啟動失敗（`cmd /c npx` 也不行）→ 全域安裝套件後改用 `node.exe` 直接跑 `.js` 入口點（根因: VSCode extension 環境 spawn `.cmd` 批次檔失敗；解法: `npm install -g <pkg>` → 找 package.json `bin` 欄位對應的 .js → 用 `node.exe <path>.js` 替代 npx）
 
 ### Playwright + Google 踩坑
