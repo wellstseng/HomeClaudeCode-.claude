@@ -21,7 +21,7 @@
 - [臨] "Claude Code: Open in New Tab" 的 `Ctrl+Shift+Esc` 與 Windows Task Manager 衝突 + MCP 安全機制擋住 → 改用 Command Palette 輸入指令名稱（根因: VS Code 快捷鍵與 Windows 系統快捷鍵重疊）
 - [臨] VS Code "Open in New Tab" 開 Claude Code 會與側邊欄 CHAT 面板搶焦點 → 點擊/貼上操作進入錯誤面板 → 截圖確認焦點位置 + 點擊新 tab 標題切換焦點後重試（根因: 同視窗兩個 webview 輸入框座標重疊）
 - [臨] 舊 MCP server process 佔住 port 3848 → 新 Guardian routes/cleanup 全不生效 → 先殺舊 process，heartbeat 15s 內自動 rebind（根因: process 未正常退出時 port 不釋放）
-- [固] settings.json hook command 用 `$HOME` → 跨專案 hook 全不觸發 → 改用 `$USERPROFILE`（根因: Git Bash `$HOME=/c/Users/x`(MSYS2格式)，Windows Python 收到後解析成 `C:\Program Files\Git\...`；Python 內部 `Path.home()` 不受影響，只有 bash→Python 命令行參數傳遞有此問題）
+- [固] settings.json hook command 用 `$HOME` 或 `$USERPROFILE` → 跨專案 hook 全不觸發 → 改用硬編碼 `C:/Users/xxx/` 路徑（根因: Git Bash `$HOME=/c/Users/x`(MSYS2格式) Python 解析成 `C:\Program Files\Git\...`；`$USERPROFILE=C:\Users\x` 含反斜線，bash 拼接路徑時展開為空；Python 內部 `Path.home()` 不受影響，只有 bash→Python 命令行參數傳遞有此問題）
 - [固] MCP server 設定用 `npx.cmd` 在 VSCode 子進程中啟動失敗（`cmd /c npx` 也不行）→ 全域安裝套件後改用 `node.exe` 直接跑 `.js` 入口點（根因: VSCode extension 環境 spawn `.cmd` 批次檔失敗；解法: `npm install -g <pkg>` → 找 package.json `bin` 欄位對應的 .js → 用 `node.exe <path>.js` 替代 npx）
 
 ### Playwright + Google 踩坑
