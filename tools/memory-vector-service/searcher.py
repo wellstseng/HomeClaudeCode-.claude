@@ -205,8 +205,8 @@ def search(
     if not query_vec or not query_vec[0]:
         return []
 
-    # Search LanceDB
-    # LanceDB cosine metric: _distance = 1 - cosine_similarity
+    # Search ChromaDB
+    # ChromaDB cosine metric: _distance = 1 - cosine_similarity
     raw_results = search_vectors(
         query_vec[0],
         top_k=top_k * 3,  # Fetch more for dedup

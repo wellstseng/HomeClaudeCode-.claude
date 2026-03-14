@@ -39,11 +39,12 @@
 
 ### 基礎設施
 - [固] Vector Service @ localhost:3849 | Dashboard @ localhost:3848
-- [固] Ollama Dual-Backend: rdchat qwen3.5（主力萃取, pri=1）+ local qwen3:1.7b（fallback, pri=2）+ qwen3-embedding（embedding）
-- [固] Vector DB: LanceDB（此電腦支援 AVX2，LanceDB 效能穩定）
+- [固] Ollama: local qwen3:1.7b + qwen3-embedding:0.6b（家用環境僅 local backend）
+- [觀] Ollama Dual-Backend（辦公室參考）: rdchat qwen3.5(pri=1) + local(pri=2) — 詳見 toolchain.md
+- [固] Vector DB: ChromaDB SQLite backend（i7-3770 不支援 AVX2，LanceDB/HNSW 會 crash）
 - [固] search_min_score: 0.65（完整版 embedding 精確度足夠）
 - [固] MCP 傳輸格式：JSONL，protocolVersion 2025-11-25
-- [固] _call_ollama_generate: num_predict=2048, timeout=120s（qwen3 thinking mode 需 ~30s on GTX 1050 Ti）
+- [固] _call_ollama_generate: num_predict=2048, timeout=120s（qwen3 thinking mode 需 ~30s on GTX 1650）
 - [固] SessionEnd 萃取由 extract-worker.py detached subprocess 執行（hook timeout=30s，萃取需 ~60s）
 
 ### 自我迭代（V2.6→V2.11）
