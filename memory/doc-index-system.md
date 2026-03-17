@@ -4,9 +4,9 @@
 - Confidence: [臨]
 - Type: semantic
 - Trigger: 系統架構, 檔案結構, file tree, architecture, hook, skill, tool, 升級, upgrade, 迭代, self-understand
-- Last-used: 2026-03-15
+- Last-used: 2026-03-17
 - Created: 2026-03-13
-- Confirmations: 23
+- Confirmations: 28
 - Tags: doc-index, system-overview
 - Related: decisions, toolchain
 
@@ -57,6 +57,7 @@ Claude Code 啟動時載入順序：
 |-------|------|---------|
 | `/consciousness-stream` | 高風險跨系統任務（唯識八識框架） | 無 |
 | `/continue` | 讀取 _staging/next-phase.md 續接 | 無 |
+| `/fix-escalation` | 6 Agent 精確修正會議（重複修正第 2 次起觸發） | 無 |
 | `/harvest` | Playwright 網頁收割 → Markdown | Playwright |
 | `/init-project` | 專案 _AIDocs 知識庫初始化 | 無 |
 | `/read-project` | 系統性讀取 → doc-index atom | 無 |

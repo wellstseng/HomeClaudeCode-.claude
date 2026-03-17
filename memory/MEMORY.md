@@ -14,6 +14,7 @@
 | unity-yaml | memory/unity/unity-yaml.md | Unity YAML, fileID, GUID, PrefabInstance, .prefab, .meta, 型別ID, 序列化, Missing Script | [固] |
 | gdoc-harvester | memory/gdoc-harvester.md | harvester, Google Docs, Sheets, 收割, Playwright, cookie, export | [觀] |
 | feedback-research | memory/feedback_research_first.md | 試錯, trial-and-error, 不熟悉, API, 框架, 搜尋, research | [固] |
+| fix-escalation | memory/feedback_fix_escalation.md | 重複修正, 修不好, retry, escalation, 精確修正, 6 agent | [固] |
 | doc-index-system | memory/doc-index-system.md | 系統架構, 檔案結構, file tree, hook, skill, tool, 升級, 迭代 | [臨] |
 
 ## 高頻事實
@@ -21,7 +22,7 @@
 - [固] 使用者: holyl | Windows 10 Pro | 回應語言: 繁體中文
 - [固] MCP: playwright, openclaw-notify, workflow-guardian, computer-use | Guardian:3848 | Vector:3849
 - [固] Ollama: local qwen3:1.7b + qwen3-embedding:0.6b | ChromaDB SQLite（i7-3770 不支援 AVX2）
-- [固] V2.11：SessionEnd萃取(extract-worker) + 鞏固 + 迭代(3條) + Wisdom + ContextBudget + rules/模組化
+- [固] V2.12：V2.11 全功能 + Fix Escalation Protocol（6 Agent 精確修正會議）+ Project Atom 載入三修
 - [固] Excel: `~/.claude/tools/read-excel.py` | SVN 每session必問update（/svn-update）
 
 > 參考文件（開發記憶系統時讀）：SPEC(`_reference/SPEC_Atomic_Memory_System.md`) | self-iteration | v3-design | v3-research

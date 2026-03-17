@@ -3,14 +3,14 @@
 - Scope: global
 - Confidence: [固]
 - Trigger: 全域決策, 工具, 工作流, workflow, guardian, hooks, MCP, 記憶系統
-- Last-used: 2026-03-15
-- Confirmations: 56
+- Last-used: 2026-03-17
+- Confirmations: 60
 - Type: decision
 
 ## 知識
 
 ### 核心架構
-- [固] 原子記憶 V2.11：Hybrid RECALL + Ranked Search + 回應捕獲（僅 SessionEnd）+ 跨 Session 鞏固（簡化計數）+ Write Gate + 自我迭代（3 條精簡）+ Wisdom Engine（硬規則+反思校準）+ 檢索強化 + Context Budget + 衝突偵測 + Atom 健康度
+- [固] 原子記憶 V2.12：V2.11 全功能 + Fix Escalation Protocol（6 Agent 精確修正會議）+ Project Atom 載入三修（多表格解析 + _ATOM_INDEX.md + 路徑分流）
 - [固] 雙 LLM：Claude Code（雲端決策）+ Ollama qwen3（本地語意處理）
 - [固] 6 hook 事件全由 workflow-guardian.py 統一處理（SessionStart/UserPromptSubmit/PostToolUse/PreCompact/Stop/SessionEnd）
 
@@ -80,6 +80,12 @@
 - [固] 純閱讀 Session：accessed_files ≥ 5 且無修改時也生成 episodic atom
 - [固] 暫存區管理：`memory/_staging/` 存放續接 prompt 等臨時檔案，.gitignore 排除，SessionEnd 提醒清理
 
+### V2.12 精確修正計畫
+- [固] Fix Escalation Protocol：同一問題修正第 2 次起，強制暫停 → `/fix-escalation` 6 Agent 會議
+- [固] Guardian hook 自動偵測 `wisdom_retry_count >= 2` → 注入 `[Guardian:FixEscalation]`
+- [固] Project Atom 載入三修：多表格解析（`break`→`continue`）+ `_parse_atom_index_file()` + `_AIAtoms/` 路徑分流
+- [固] 豁免：typo/語法錯誤不計；使用者說「直接改」可跳過
+
 ### 歷史決策
 - [固] 記憶檢索統一用 Python，已移除 Node.js memory-v2（2026-03-05 退役）
 - [固] Stop hook 只保留 Guardian 閘門，移除 Discord 通知
@@ -96,3 +102,4 @@
 - 2026-03-11: V2.8→V2.10 — Wisdom Engine + 檢索強化(ACT-R/Spreading) + Session 全軌跡追蹤
 - 2026-03-13: V2.11 全面升級 — 精簡（砍逐輪萃取/因果圖/自動晉升/迭代8→3）+ 品質（衝突偵測/反思校準）+ 模組化（rules/+Context Budget）
 - 2026-03-13: 自檢修復 — 清除因果圖殘留 + Context Budget 動態化 + 索引同步 + atom 去重 + extract-worker 啟用
+- 2026-03-17: V2.12 — Fix Escalation Protocol + Project Atom 載入三修（從辦公室環境合併）
