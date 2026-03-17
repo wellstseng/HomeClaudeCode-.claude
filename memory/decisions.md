@@ -10,7 +10,7 @@
 ## 知識
 
 ### 核心架構
-- [固] 原子記憶 V2.11：Hybrid RECALL + Ranked Search + 回應捕獲（僅 SessionEnd）+ 跨 Session 鞏固（簡化計數）+ Write Gate + 自我迭代（3 條精簡）+ Wisdom Engine（硬規則+反思校準）+ 檢索強化 + Context Budget + 衝突偵測 + Atom 健康度
+- [固] 原子記憶 V2.12：Hybrid RECALL + Ranked Search + 回應捕獲（僅 SessionEnd）+ 跨 Session 鞏固（簡化計數）+ Write Gate + 自我迭代（3 條精簡）+ Wisdom Engine（硬規則+反思校準）+ 檢索強化 + Context Budget + 衝突偵測 + Atom 健康度 + Fix Escalation Protocol（6 Agent 精確修正會議）
 - [固] 雙 LLM：Claude Code（雲端決策）+ Ollama qwen3（本地語意處理）
 - [固] 6 hook 事件全由 workflow-guardian.py 統一處理（SessionStart/UserPromptSubmit/PostToolUse/PreCompact/Stop/SessionEnd）
 
@@ -78,6 +78,12 @@
 - [固] 純閱讀 Session：accessed_files ≥ 5 且無修改時也生成 episodic atom
 - [固] 暫存區管理：`memory/_staging/` 存放續接 prompt 等臨時檔案，.gitignore 排除，SessionEnd 提醒清理
 
+### V2.12 精確修正計畫
+- [固] Fix Escalation Protocol：同一問題修正第 2 次起，強制啟動 6 Agent 精確修正會議（外部搜索+專案調查+正反辯論 2 輪+落地分析+垃圾回收）
+- [固] Guardian hook 自動偵測：UserPromptSubmit 檢查 wisdom_retry_count ≥ 2 → 注入 `[Guardian:FixEscalation]` 信號
+- [固] `/fix-escalation` skill：固定化 agent prompt 模板，5 Phase 流程（暫停→蒐集→辯論→深度挑戰→決策執行→驗證）
+- [固] 自我驗證+成效追蹤：連續 3 次未解決強制暫停與使用者對齊
+
 ### 歷史決策
 - [固] 記憶檢索統一用 Python，已移除 Node.js memory-v2（2026-03-05 退役）
 - [固] Stop hook 只保留 Guardian 閘門，移除 Discord 通知
@@ -94,3 +100,4 @@
 - 2026-03-11: V2.8→V2.10 — Wisdom Engine + 檢索強化(ACT-R/Spreading) + Session 全軌跡追蹤
 - 2026-03-13: V2.11 全面升級 — 精簡（砍逐輪萃取/因果圖/自動晉升/迭代8→3）+ 品質（衝突偵測/反思校準）+ 模組化（rules/+Context Budget）
 - 2026-03-13: 自檢修復 — 清除因果圖殘留 + Context Budget 動態化 + 索引同步 + atom 去重 + extract-worker 啟用
+- 2026-03-17: V2.12 精確修正計畫 — Fix Escalation Protocol（6 Agent 會議制）+ Guardian 自動偵測 + /fix-escalation skill

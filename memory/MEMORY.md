@@ -21,7 +21,7 @@
 - [固] 使用者: holylight | Win11 Pro | GPU: GTX 1050 Ti (local) / RTX 3090 (rdchat)
 - [固] MCP: playwright, openclaw-notify, workflow-guardian, computer-use | Guardian:3848 | Vector:3849
 - [固] Dual-Backend: rdchat qwen3.5(pri=1) → local qwen3:1.7b(pri=2) | LanceDB min_score:0.65
-- [固] V2.11：SessionEnd萃取(extract-worker) + 鞏固 + 迭代(3條) + Wisdom + ContextBudget + rules/模組化
+- [固] V2.12：SessionEnd萃取(extract-worker) + 鞏固 + 迭代(3條) + Wisdom + ContextBudget + rules/模組化 + Fix Escalation Protocol
 - [固] Excel: `~/.claude/tools/read-excel.py` | SVN 每session必問update（/svn-update）
 
 > 參考文件（開發記憶系統時讀）：SPEC(`_reference/SPEC_Atomic_Memory_System.md`) | self-iteration | v3-design | v3-research

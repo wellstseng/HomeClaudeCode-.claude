@@ -21,4 +21,4 @@
 
 ## 架構一句話摘要
 
-基於 Claude Code hooks 事件驅動的工作流監督系統，搭配雙 LLM（Claude + Ollama qwen3/qwen3.5）原子記憶管理跨 session 知識。V2.11：Dual-Backend（rdchat+local）、Wisdom Engine、衝突偵測、rules/ 模組化、76 檔系統。
+基於 Claude Code hooks 事件驅動的工作流監督系統，搭配雙 LLM（Claude + Ollama qwen3/qwen3.5）原子記憶管理跨 session 知識。V2.12：Dual-Backend（rdchat+local）、Wisdom Engine、衝突偵測、rules/ 模組化、Fix Escalation Protocol、76 檔系統。
