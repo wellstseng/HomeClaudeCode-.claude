@@ -425,18 +425,16 @@ def run_extraction(ctx: Dict[str, Any]) -> Dict[str, Any]:
         return _empty_result()
 
     # LLM extraction with intent-aware prompt
-    # Per-turn: pass existing items so LLM avoids duplicates in generation
+    # Pass existing items so LLM avoids duplicates in generation
     prompt = _build_prompt(intent, combined,
-                           existing_items=knowledge_queue if is_per_turn else None)
+                           existing_items=knowledge_queue if knowledge_queue else None)
     raw = _call_ollama(prompt)
     parsed = _parse_llm_response(raw)
     if not parsed:
         return _empty_result()
 
-    # Dedup against existing knowledge_queue
-    # Per-turn uses lower threshold (0.65) since LLM may rephrase similar facts
-    dedup_threshold = 0.65 if is_per_turn else 0.80
-    items = _dedup_items(parsed, knowledge_queue, threshold=dedup_threshold)
+    # Dedup against existing knowledge_queue (0.65 for both modes)
+    items = _dedup_items(parsed, knowledge_queue, threshold=0.65)
     # Cap items
     items = items[:max_items]
     if not items:
