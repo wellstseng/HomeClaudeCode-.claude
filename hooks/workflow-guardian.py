@@ -1112,7 +1112,9 @@ def handle_user_prompt_submit(
         return
 
     prompt = input_data.get("prompt", "")
-    prompt_lower = prompt.lower().strip()
+    # Strip IDE context tags to avoid false keyword matches on tag content
+    clean_prompt = re.sub(r'<ide_\w+>.*?</ide_\w+>', '', prompt, flags=re.DOTALL).strip()
+    prompt_lower = clean_prompt.lower()
     lines: List[str] = []
 
     # ─── Dual-Backend: long_die user response ─────────────────────────
@@ -1258,7 +1260,8 @@ def handle_user_prompt_submit(
             for name, rel_path, triggers in cross_atoms:
                 if name not in already_injected and sum(_kw_match(kw, prompt_lower) for kw in triggers) >= 2:
                     all_atoms.append(((name, rel_path, triggers), cross_parent))
-                    lines.append(f"[Guardian:CrossProject] {proj_dir.name}/{name} matched")
+                    # CrossProject match notification → debug log only
+                    _atom_debug_log("CrossProject", f"{proj_dir.name}/{name} matched", config)
     for (name, rel_path, triggers), base_dir in all_atoms:
         if name not in already_injected and any(_kw_match(kw, prompt_lower) for kw in triggers):
             matched_with_dir.append(((name, rel_path, triggers), base_dir))
@@ -1366,7 +1369,6 @@ def handle_user_prompt_submit(
                 break
 
         if atom_lines:
-            lines.append("[Guardian:Memory] Trigger-matched atoms loaded:")
             lines.extend(atom_lines)
             state["injected_atoms"] = already_injected + newly_injected
 
@@ -1440,16 +1442,10 @@ def handle_user_prompt_submit(
                         pass
                     break
 
-    # ── Blind-Spot Reporter (v2.9) ──────────────────────────────────
+    # ── Blind-Spot Reporter (v2.9) — debug log only, not injected ──
     if (not matched_with_dir and not newly_injected and not alias_injected_projects
-            and len(prompt.strip()) >= 10):
-        prompt_preview = prompt[:50].strip()
-        if len(prompt) > 50:
-            prompt_preview += "..."
-        lines.append(
-            f'[Guardian:BlindSpot] 未找到與 "{prompt_preview}" '
-            f'相關的記憶 atom。建議 LLM 主動搜尋檔案或詢問使用者。'
-        )
+            and len(clean_prompt) >= 10):
+        _atom_debug_log("BlindSpot", f"未匹配: {clean_prompt[:80]}", config)
 
     # ── Fix Escalation Protocol (v2.12) ─────────────────────────────
     retry_count = state.get("wisdom_retry_count", 0)

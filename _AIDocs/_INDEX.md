@@ -9,7 +9,7 @@
 
 | # | 文件名稱 | 說明 |
 |---|---------|------|
-| 1 | Architecture.md | 系統架構總覽：原子記憶 V2.8 + Workflow Guardian + Wisdom Engine + hooks |
+| 1 | Architecture.md | 系統架構總覽：原子記憶 V2.12 + Workflow Guardian + Wisdom Engine + hooks |
 | 2 | Project_File_Tree.md | 完整目錄結構 |
 | 3 | AtomicMemory-v2.1-Plan.md | v2.1 缺陷研究與修補計畫（歷史文件） |
 | 4 | _CHANGELOG.md | 變更記錄（最近 ~8 筆） |
