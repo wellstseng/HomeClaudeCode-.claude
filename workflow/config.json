@@ -86,6 +86,13 @@
     "session_end_max_chars": 20000,
     "session_end_max_items": 5,
     "session_end_timeout_seconds": 10,
-    "classification_default": "[臨]"
+    "classification_default": "[臨]",
+    "per_turn": {
+      "enabled": true,
+      "min_new_chars": 500,
+      "max_items": 3,
+      "skip_cross_session": true,
+      "cooldown_seconds": 120
+    }
   }
 }

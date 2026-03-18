@@ -1607,6 +1607,172 @@ def handle_pre_compact(input_data: Dict[str, Any], config: Dict[str, Any]) -> No
     output_nothing()
 
 
+# ─── Per-turn incremental extraction helpers (V2.12) ─────────────────────
+
+
+def _is_pid_alive(pid: int) -> bool:
+    """Check if a process is still running."""
+    if not pid:
+        return False
+    if sys.platform == "win32":
+        import ctypes
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        h = ctypes.windll.kernel32.OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+        )
+        if h:
+            ctypes.windll.kernel32.CloseHandle(h)
+            return True
+        return False
+    else:
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
+
+def _cwd_to_project_slug(cwd: str) -> str:
+    slug = cwd.replace(":", "-").replace("\\", "-").replace("/", "-").replace(".", "-")
+    if slug:
+        slug = slug[0].lower() + slug[1:]
+    return slug
+
+
+def _find_transcript(session_id: str, cwd: str):
+    slug = _cwd_to_project_slug(cwd)
+    candidate = CLAUDE_DIR / "projects" / slug / f"{session_id}.jsonl"
+    return candidate if candidate.exists() else None
+
+
+def _count_new_assistant_chars(transcript_path, byte_offset: int) -> int:
+    """Lightweight pre-scan: count assistant text chars from byte_offset."""
+    total = 0
+    try:
+        with open(transcript_path, "r", encoding="utf-8") as f:
+            if byte_offset > 0:
+                f.seek(byte_offset)
+            for raw_line in f:
+                try:
+                    obj = json.loads(raw_line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if obj.get("type") != "assistant":
+                    continue
+                content = obj.get("message", {}).get("content", [])
+                if not isinstance(content, list):
+                    continue
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        t = block.get("text", "")
+                        if t and len(t) > 30:
+                            total += len(t)
+    except (OSError, UnicodeDecodeError):
+        pass
+    return total
+
+
+def _spawn_extract_worker(ctx_dict: dict) -> int:
+    """Spawn extract-worker.py as detached subprocess. Returns PID or 0."""
+    import subprocess as _sp
+    worker_path = CLAUDE_DIR / "hooks" / "extract-worker.py"
+    if not worker_path.exists():
+        return 0
+    try:
+        kwargs = {}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = _sp.CREATE_NO_WINDOW | _sp.DETACHED_PROCESS
+        else:
+            kwargs["start_new_session"] = True
+        worker_log = CLAUDE_DIR / "workflow" / "extract-worker.log"
+        worker_log_fh = open(worker_log, "a", encoding="utf-8")
+        json_ctx = json.dumps(ctx_dict, ensure_ascii=False)
+        proc = _sp.Popen(
+            [sys.executable, str(worker_path)],
+            stdin=_sp.PIPE,
+            stdout=_sp.DEVNULL,
+            stderr=worker_log_fh,
+            **kwargs,
+        )
+        worker_log_fh.close()
+        proc.stdin.write(json_ctx.encode("utf-8"))
+        proc.stdin.close()
+        return proc.pid
+    except Exception as e:
+        _atom_debug_error("_spawn_extract_worker", e)
+        return 0
+
+
+def _maybe_spawn_per_turn_extraction(
+    session_id: str, state: Dict[str, Any], config: Dict[str, Any]
+) -> None:
+    """Conditionally spawn per-turn incremental extraction."""
+    rc = config.get("response_capture", {})
+    pt = rc.get("per_turn", {})
+    if not pt.get("enabled", False):
+        return
+
+    # Cooldown check
+    last_at = state.get("last_per_turn_extraction_at", "")
+    if last_at:
+        cooldown = pt.get("cooldown_seconds", 120)
+        try:
+            last_t = datetime.fromisoformat(last_at)
+            if (datetime.now().astimezone() - last_t).total_seconds() < cooldown:
+                return
+        except (ValueError, TypeError):
+            pass
+
+    # Concurrency guard
+    prev_pid = state.get("extract_worker_pid", 0)
+    if _is_pid_alive(prev_pid):
+        return
+
+    # Check new content since last extraction
+    cwd = state.get("session", {}).get("cwd", "")
+    transcript = _find_transcript(session_id, cwd)
+    if not transcript:
+        return
+
+    prev_offset = state.get("extraction_offset", 0)
+    file_size = transcript.stat().st_size
+    if file_size <= prev_offset:
+        return
+
+    new_chars = _count_new_assistant_chars(transcript, prev_offset)
+    min_chars = pt.get("min_new_chars", 500)
+    if new_chars < min_chars:
+        return
+
+    # Resolve intent
+    tracker = state.get("topic_tracker", {})
+    dist = tracker.get("intent_distribution", {})
+    intent = max(dist, key=dist.get, default="build") if dist else "build"
+
+    # Spawn worker
+    worker_ctx = {
+        "session_id": session_id,
+        "cwd": cwd,
+        "config": config,
+        "knowledge_queue": state.get("knowledge_queue", []),
+        "session_intent": intent,
+        "mode": "per_turn",
+        "byte_offset": prev_offset,
+    }
+    pid = _spawn_extract_worker(worker_ctx)
+    if pid:
+        state["extract_worker_pid"] = pid
+        state["last_per_turn_extraction_at"] = _now_iso()
+        write_state(session_id, state)
+        print(
+            f"[v2.12] per-turn extract-worker spawned (pid={pid}, offset={prev_offset}, new_chars={new_chars})",
+            file=sys.stderr,
+        )
+
+
+# ─── Stop Hook ────────────────────────────────────────────────────────────
+
+
 def handle_stop(input_data: Dict[str, Any], config: Dict[str, Any]) -> None:
     session_id = input_data.get("session_id", "")
     state = read_state(session_id)
@@ -1622,11 +1788,13 @@ def handle_stop(input_data: Dict[str, Any], config: Dict[str, Any]) -> None:
     if stop_count >= max_blocks:
         state["phase"] = "done"
         write_state(session_id, state)
+        _maybe_spawn_per_turn_extraction(session_id, state, config)
         output_nothing()
         return
 
     # Already synced or marked done
     if phase in ("done", "syncing"):
+        _maybe_spawn_per_turn_extraction(session_id, state, config)
         output_nothing()
         return
 
@@ -1638,6 +1806,7 @@ def handle_stop(input_data: Dict[str, Any], config: Dict[str, Any]) -> None:
 
     # Muted session — always allow
     if state.get("muted"):
+        _maybe_spawn_per_turn_extraction(session_id, state, config)
         output_nothing()
         return
 
@@ -1645,6 +1814,7 @@ def handle_stop(input_data: Dict[str, Any], config: Dict[str, Any]) -> None:
     if mod_count == 0 and kq_count == 0:
         state["phase"] = "done"
         write_state(session_id, state)
+        _maybe_spawn_per_turn_extraction(session_id, state, config)
         output_nothing()
         return
 
@@ -1652,12 +1822,14 @@ def handle_stop(input_data: Dict[str, Any], config: Dict[str, Any]) -> None:
     if len(unique_files) < min_files and kq_count == 0:
         state["phase"] = "done"
         write_state(session_id, state)
+        _maybe_spawn_per_turn_extraction(session_id, state, config)
         output_nothing()
         return
 
     # Block: meaningful sync needed
     state["stop_blocked_count"] = stop_count + 1
     write_state(session_id, state)
+    _maybe_spawn_per_turn_extraction(session_id, state, config)
 
     file_names = ", ".join(f.rsplit("/", 1)[-1] for f in unique_files[:8])
 
@@ -2426,50 +2598,24 @@ def handle_session_end(input_data: Dict[str, Any], config: Dict[str, Any]) -> No
     state["ended_at"] = _now_iso()
     state["phase"] = "done"
 
-    # ─── V2.11-fix: Spawn extract-worker.py as detached subprocess ──────
-    # extract-worker handles: transcript reading, LLM extraction, cross-session
-    # observation, and pattern aggregation — all independently of hook timeout.
+    # ─── Spawn extract-worker.py as detached subprocess (V2.12) ─────────
     rc = config.get("response_capture", {})
     if rc.get("enabled", True):
-        try:
-            import subprocess
-            cwd = state.get("session", {}).get("cwd", "")
-            tracker = state.get("topic_tracker", {})
-            intent = tracker.get("intent_distribution", {}).get("top", "build")
-            worker_ctx = json.dumps({
-                "session_id": session_id,
-                "cwd": cwd,
-                "config": config,
-                "knowledge_queue": state.get("knowledge_queue", []),
-                "session_intent": intent,
-            }, ensure_ascii=False)
-            worker_path = CLAUDE_DIR / "hooks" / "extract-worker.py"
-            if worker_path.exists():
-                # Detached subprocess: survives hook timeout
-                kwargs = {}
-                if sys.platform == "win32":
-                    kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
-                else:
-                    kwargs["start_new_session"] = True
-                worker_log = CLAUDE_DIR / "workflow" / "extract-worker.log"
-                worker_log_fh = open(worker_log, "a", encoding="utf-8")
-                proc = subprocess.Popen(
-                    [sys.executable, str(worker_path)],
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.DEVNULL,
-                    stderr=worker_log_fh,
-                    **kwargs,
-                )
-                worker_log_fh.close()  # fd inherited by child; parent can close
-                proc.stdin.write(worker_ctx.encode("utf-8"))
-                proc.stdin.close()
-                print(
-                    f"[v2.11] extract-worker spawned (pid={proc.pid}, intent={intent})",
-                    file=sys.stderr,
-                )
-        except Exception as e:
-            print(f"[v2.11] extract-worker spawn error: {e}", file=sys.stderr)
-            _atom_debug_error("extract-worker spawn", e)
+        cwd = state.get("session", {}).get("cwd", "")
+        tracker = state.get("topic_tracker", {})
+        dist = tracker.get("intent_distribution", {})
+        intent = max(dist, key=dist.get, default="build") if dist else "build"
+        worker_ctx = {
+            "session_id": session_id,
+            "cwd": cwd,
+            "config": config,
+            "knowledge_queue": state.get("knowledge_queue", []),
+            "session_intent": intent,
+        }
+        pid = _spawn_extract_worker(worker_ctx)
+        if pid:
+            print(f"[v2.12] extract-worker spawned (pid={pid}, intent={intent})", file=sys.stderr)
+        state["extract_worker_pid"] = 0  # SessionEnd: don't track PID (session ending)
 
     mod_count = len(state.get("modified_files", []))
     kq_count = len(state.get("knowledge_queue", []))
