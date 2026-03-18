@@ -194,9 +194,16 @@ _PROMPT_TEMPLATES = {
 }
 
 
-def _build_prompt(intent: str, text: str) -> str:
+def _build_prompt(intent: str, text: str, existing_items: List[dict] = None) -> str:
     template = _PROMPT_TEMPLATES.get(intent, _PROMPT_TEMPLATES["build"])
-    return template.replace("{text}", text[:4000])
+    prompt = template.replace("{text}", text[:4000])
+    # Per-turn: inject existing knowledge to prevent duplicates
+    if existing_items:
+        existing_contents = [q.get("content", "") for q in existing_items if q.get("content")]
+        if existing_contents:
+            dedup_block = "\n已萃取過的知識（不要重複）:\n" + "\n".join(f"- {c}" for c in existing_contents[-10:]) + "\n\n"
+            prompt = prompt.replace("Session 文字:\n", dedup_block + "Session 文字:\n")
+    return prompt
 
 
 # ─── Parse + Dedup ────────────────────────────────────────────────────────────
@@ -418,14 +425,18 @@ def run_extraction(ctx: Dict[str, Any]) -> Dict[str, Any]:
         return _empty_result()
 
     # LLM extraction with intent-aware prompt
-    prompt = _build_prompt(intent, combined)
+    # Per-turn: pass existing items so LLM avoids duplicates in generation
+    prompt = _build_prompt(intent, combined,
+                           existing_items=knowledge_queue if is_per_turn else None)
     raw = _call_ollama(prompt)
     parsed = _parse_llm_response(raw)
     if not parsed:
         return _empty_result()
 
-    # Dedup against existing knowledge_queue (threshold 0.80)
-    items = _dedup_items(parsed, knowledge_queue, threshold=0.80)
+    # Dedup against existing knowledge_queue
+    # Per-turn uses lower threshold (0.65) since LLM may rephrase similar facts
+    dedup_threshold = 0.65 if is_per_turn else 0.80
+    items = _dedup_items(parsed, knowledge_queue, threshold=dedup_threshold)
     # Cap items
     items = items[:max_items]
     if not items:
