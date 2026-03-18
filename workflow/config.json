@@ -1,4 +1,5 @@
 {
+  "atom_debug": false,
   "enabled": true,
   "stop_gate_max_blocks": 2,
   "min_files_to_block": 2,

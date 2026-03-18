@@ -44,6 +44,35 @@ def _empty_result() -> Dict[str, Any]:
     }
 
 
+# ─── Atom Debug Log ──────────────────────────────────────────────────────────
+
+
+def _atom_debug_log(tag: str, content: str, config: Dict[str, Any] = None) -> None:
+    """Write to atom-debug.log when atom_debug flag is on.
+    For ERROR tag, always write regardless of flag."""
+    if tag != "ERROR" and not (config or {}).get("atom_debug", False):
+        return
+    try:
+        log_dir = Path.home() / ".claude" / "Logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "atom-debug.log"
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        body = content if content and content.strip() else "NONE"
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"[{ts}][{tag}] {body}\n\n")
+    except Exception:
+        pass
+
+
+def _atom_debug_error(source: str, exc: Exception) -> None:
+    """Log error with source context and stack trace."""
+    import traceback
+    tb = traceback.format_exc()
+    if "NoneType" in tb:
+        tb = f"{type(exc).__name__}: {exc}"
+    _atom_debug_log("ERROR", f"[{source}] {tb}", {"atom_debug": True})
+
+
 # ─── Transcript helpers ──────────────────────────────────────────────────────
 
 
@@ -104,7 +133,8 @@ def _call_ollama(prompt: str, model: str = None, timeout: int = 120) -> str:
             prompt, model=model, timeout=timeout,
             think=True, temperature=0.1, num_predict=8192,
         )
-    except Exception:
+    except Exception as e:
+        _atom_debug_error("_call_ollama", e)
         return ""
 
 
@@ -332,7 +362,8 @@ def _cross_session_search(
 
             observations.append(obs)
 
-        except Exception:
+        except Exception as e:
+            _atom_debug_error("_cross_session_search", e)
             continue  # Skip this item, try next
 
     return observations
@@ -401,9 +432,17 @@ def main():
         raw_input = sys.stdin.read()
         ctx = json.loads(raw_input)
         result = run_extraction(ctx)
+
+        # atom-debug: log extraction results
+        _cfg = ctx.get("config", {})
+        items = result.get("extracted_items", [])
+        body = json.dumps(items, ensure_ascii=False, indent=2) if items else None
+        _atom_debug_log("萃取:extract-worker", body, _cfg)
+
         sys.stdout.write(json.dumps(result, ensure_ascii=False))
     except Exception as e:
         print(f"[extract-worker] error: {e}", file=sys.stderr)
+        _atom_debug_error("extract-worker:main", e)
         sys.stdout.write(json.dumps(_empty_result()))
 
 

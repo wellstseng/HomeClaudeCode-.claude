@@ -589,6 +589,35 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
+# ─── Atom Debug Log ──────────────────────────────────────────────────────────
+
+
+def _atom_debug_log(tag: str, content: str, config: Dict[str, Any] = None) -> None:
+    """Write to atom-debug.log when atom_debug flag is on.
+    For ERROR tag, always write regardless of flag."""
+    if tag != "ERROR" and not (config or {}).get("atom_debug", False):
+        return
+    try:
+        log_dir = Path.home() / ".claude" / "Logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "atom-debug.log"
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        body = content if content and content.strip() else "NONE"
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"[{ts}][{tag}] {body}\n\n")
+    except Exception:
+        pass
+
+
+def _atom_debug_error(source: str, exc: Exception) -> None:
+    """Log error with source context and stack trace."""
+    import traceback
+    tb = traceback.format_exc()
+    if "NoneType" in tb:
+        tb = f"{type(exc).__name__}: {exc}"
+    _atom_debug_log("ERROR", f"[{source}] {tb}", {"atom_debug": True})
+
+
 # ─── Intent Classifier (v2.1 Sprint 2) ───────────────────────────────────────
 
 INTENT_PATTERNS = {
@@ -902,7 +931,8 @@ def _semantic_search(
                 entries.append((name, r.get("file_path", ""), []))
                 seen.add(name)
         return entries
-    except Exception:
+    except Exception as e:
+        _atom_debug_error("_semantic_search", e)
         return []  # graceful fallback
 
 
@@ -1447,6 +1477,9 @@ def handle_user_prompt_submit(
                 state["total_reminds"] = total_reminds + 1
 
     write_state(session_id, state)
+
+    # atom-debug: log injection content (NONE if empty)
+    _atom_debug_log("注入", "\n".join(lines) if lines else None, config)
 
     if lines:
         # V2.11: Context budget hard cap
@@ -2348,6 +2381,7 @@ def _generate_episodic_atom(
     atom_path.write_text(content, encoding="utf-8")
     # v2.2: Episodic atoms NOT listed in MEMORY.md index (TTL 24d, vector search discovers them)
 
+    _atom_debug_log("萃取:episodic", content, config)
     print(f"[episodic] Generated: {atom_path.name} (scope: {scope_label})", file=sys.stderr)
     return atom_name
 
@@ -2405,6 +2439,7 @@ def handle_session_end(input_data: Dict[str, Any], config: Dict[str, Any]) -> No
                 )
         except Exception as e:
             print(f"[v2.11] extract-worker spawn error: {e}", file=sys.stderr)
+            _atom_debug_error("extract-worker spawn", e)
 
     mod_count = len(state.get("modified_files", []))
     kq_count = len(state.get("knowledge_queue", []))
@@ -2486,6 +2521,7 @@ def handle_session_end(input_data: Dict[str, Any], config: Dict[str, Any]) -> No
             episodic_generated = True
         except Exception as e:
             print(f"[episodic] generation failed: {e}", file=sys.stderr)
+            _atom_debug_error("_generate_episodic_atom", e)
 
     # V2.11-fix: Save review marker if review was due this session
     if state.get("review_due"):
@@ -2551,6 +2587,7 @@ def main():
         except Exception as e:
             # Never crash; log to stderr (verbose mode only) and continue
             print(f"[workflow-guardian] Error in {event}: {e}", file=sys.stderr)
+            _atom_debug_error(f"workflow-guardian:{event}", e)
             sys.exit(0)
     else:
         sys.exit(0)
