@@ -415,12 +415,20 @@ def extract_aidocs_keywords(entries: List[AiDocsEntry]) -> Dict[str, List[str]]:
     return result
 
 
+def _kw_match(kw: str, prompt_lower: str) -> bool:
+    """Match a trigger keyword against prompt. Short ASCII keywords (<=2 chars)
+    use word-boundary regex to avoid false positives (e.g. 'OT' matching 'not')."""
+    if len(kw) <= 2 and kw.isascii():
+        return bool(re.search(r'\b' + re.escape(kw) + r'\b', prompt_lower))
+    return kw in prompt_lower
+
+
 def match_triggers(prompt: str, atoms: List[AtomEntry]) -> List[AtomEntry]:
     """Match user prompt against atom Trigger keywords. Case-insensitive."""
     prompt_lower = prompt.lower()
     matched = []
     for name, rel_path, triggers in atoms:
-        if any(kw in prompt_lower for kw in triggers):
+        if any(_kw_match(kw, prompt_lower) for kw in triggers):
             matched.append((name, rel_path, triggers))
     return matched
 
