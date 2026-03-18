@@ -1,6 +1,6 @@
 # /atom-debug — 原子記憶 Debug Log 開關
 
-> 切換原子記憶系統的注入/萃取 debug log。開啟後，每次注入和萃取的內容會寫入 `~/.claude/Logs/atom-debug.log`。
+> 切換原子記憶系統的注入/萃取 debug log。開啟後，每次注入和萃取的內容會寫入 `~/.claude/Logs/atom-debug-{日期}.log`。
 > 全域 Skill，適用任何專案。
 
 ---
@@ -36,5 +36,5 @@
 
 回覆切換結果：
 
-- **開啟**：「Atom Debug Log 已開啟。注入/萃取內容將記錄至 `~/.claude/Logs/atom-debug.log`。」
+- **開啟**：「Atom Debug Log 已開啟。注入/萃取內容將記錄至 `~/.claude/Logs/atom-debug-{日期}.log`。」
 - **關閉**：「Atom Debug Log 已關閉。」
