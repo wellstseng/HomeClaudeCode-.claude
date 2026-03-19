@@ -24,6 +24,12 @@ from typing import Any, Dict, List, Optional
 CLAUDE_DIR = Path.home() / ".claude"
 WORKFLOW_DIR = CLAUDE_DIR / "workflow"
 
+# Windows cp950 → UTF-8 (detached subprocess doesn't inherit guardian's encoding)
+if sys.platform == "win32":
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
 sys.path.insert(0, str(CLAUDE_DIR / "tools"))
 from ollama_client import get_client
 
