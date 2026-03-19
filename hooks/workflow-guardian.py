@@ -164,6 +164,25 @@ def new_state(session_id: str, cwd: str, source: str) -> Dict[str, Any]:
     }
 
 
+def _ensure_state(
+    session_id: str, input_data: Dict[str, Any], config: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """Read state; if missing (SessionStart was skipped), auto-create one."""
+    state = read_state(session_id)
+    if state:
+        return state
+    cwd = input_data.get("cwd", "")
+    state = new_state(session_id, cwd, "fallback")
+    state["phase"] = "working"
+    write_state(session_id, state)
+    _atom_debug_log(
+        "Fallback",
+        f"SessionStart missed for {session_id[:12]}… — auto-created state",
+        config,
+    )
+    return state
+
+
 # ─── Memory Index Parsing ────────────────────────────────────────────────────
 
 TABLE_ROW_RE = re.compile(r"^\|(.+)\|$")
@@ -1187,7 +1206,7 @@ def handle_user_prompt_submit(
     input_data: Dict[str, Any], config: Dict[str, Any]
 ) -> None:
     session_id = input_data.get("session_id", "")
-    state = read_state(session_id)
+    state = _ensure_state(session_id, input_data, config)
     if not state:
         output_nothing()
         return
@@ -1602,7 +1621,7 @@ def handle_user_prompt_submit(
 
 def handle_post_tool_use(input_data: Dict[str, Any], config: Dict[str, Any]) -> None:
     session_id = input_data.get("session_id", "")
-    state = read_state(session_id)
+    state = _ensure_state(session_id, input_data, config)
     if not state:
         output_nothing()
         return
@@ -1672,7 +1691,7 @@ def handle_post_tool_use(input_data: Dict[str, Any], config: Dict[str, Any]) -> 
 
 def handle_pre_compact(input_data: Dict[str, Any], config: Dict[str, Any]) -> None:
     session_id = input_data.get("session_id", "")
-    state = read_state(session_id)
+    state = _ensure_state(session_id, input_data, config)
     if not state:
         output_nothing()
         return
@@ -1924,7 +1943,7 @@ def _maybe_spawn_failure_extraction(
 
 def handle_stop(input_data: Dict[str, Any], config: Dict[str, Any]) -> None:
     session_id = input_data.get("session_id", "")
-    state = read_state(session_id)
+    state = _ensure_state(session_id, input_data, config)
     if not state:
         output_nothing()
         return
@@ -2749,7 +2768,7 @@ def _generate_episodic_atom(
 
 def handle_session_end(input_data: Dict[str, Any], config: Dict[str, Any]) -> None:
     session_id = input_data.get("session_id", "")
-    state = read_state(session_id)
+    state = _ensure_state(session_id, input_data, config)
     if not state:
         sys.exit(0)
         return
