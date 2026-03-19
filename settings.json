@@ -58,7 +58,8 @@
       "mcp__playwright__browser_fill_form",
       "mcp__playwright__browser_network_requests",
       "mcp__playwright__browser_evaluate",
-      "Read(//c/OpenClawWorkspace/**)"
+      "Read(//c/OpenClawWorkspace/**)",
+      "Read(//c/Users/holylight/.claude/$HOME/**)"
     ],
     "defaultMode": "bypassPermissions",
     "additionalDirectories": [
@@ -72,7 +73,8 @@
       "C:\\Users\\holylight\\.claude\\projects\\c--Projects-sgi-server\\memory",
       "C:\\Users\\holylight\\.claude\\memory\\_staging",
       "C:\\Users\\holylight\\.claude\\projects\\c--Users-holylight--claude\\memory",
-      "C:\\Users\\holylight\\.claude\\projects\\c--Users-holylight--claude\\memory\\_staging"
+      "C:\\Users\\holylight\\.claude\\projects\\c--Users-holylight--claude\\memory\\_staging",
+      "C:\\Users\\holylight\\.claude\\$HOME\\.claude\\memory"
     ]
   },
   "hooks": {

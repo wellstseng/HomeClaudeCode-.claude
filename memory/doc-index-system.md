@@ -1,12 +1,12 @@
 # 原子記憶系統 — 全檔案索引
 
 - Scope: global
-- Confidence: [臨]
+- Confidence: [固]
 - Type: semantic
 - Trigger: 系統架構, 檔案結構, file tree, architecture, hook, skill, tool, 升級, upgrade, 迭代, self-understand
 - Last-used: 2026-03-19
 - Created: 2026-03-13
-- Confirmations: 23
+- Confirmations: 24
 - Tags: doc-index, system-overview
 - Related: decisions, decisions-architecture, toolchain
 

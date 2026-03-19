@@ -3,10 +3,10 @@
 - Scope: global
 - Confidence: [固]
 - Type: procedural
-- Trigger: 工作流程, 大型任務, 分階段, SOP, 任務拆分, 上版, GIT, 版本控制, 同步, vcs, 功能拆解, 實作拆解, 開發計畫, 新功能, 新系統, 實作計畫, 規格書, ICLD, 閉環, Sprint
+- Trigger: 工作流程, 大型任務, 分階段, SOP, 任務拆分, 上版, GIT, 版本控制, vcs, 功能拆解, 實作拆解, 開發計畫, 新功能, 新系統, 實作計畫, 規格書, ICLD, 閉環, Sprint
 - Last-used: 2026-03-19
 - Created: 2026-03-06
-- Confirmations: 48
+- Confirmations: 49
 - Tags: workflow, vcs
 - Related: decisions, workflow-svn
 
@@ -16,8 +16,7 @@
 - 分階段 session 執行
 - 每階段：完成 → 驗證 → 上傳 GIT → 提供下一階段 prompt 給使用者
 - **「執驗上P」**：階段收尾口令，等同 執行 → 驗證 → 上 GIT → 產 Prompt（四步都做完）
-- 有順序依賴的任務（分析→計畫→執行）應在同一對話完成
-- 獨立子任務可安全新開對話（MEMORY.md 會自動載入）
+- 拆分規則 → 詳見 `rules/session-management.md`（必經處：拆分指引 + 續航 + 開新 session）
 
 ### 製程選擇
 - **Phase 模式**（預設）：按技術層切分（定義→邏輯→UI），每 Phase 結束「執驗上P」
@@ -58,12 +57,9 @@
 
 **Sprint prompt / 驗證報告模板**：`~/.claude/memory/templates/icld-sprint-template.md`
 
-### GIT 流程
-- 「上 GIT」= git add + commit + push（三步都做完）
-- 上版前先做秘密洩漏檢查
-
-### 工作結束同步判斷
-→ 詳見 `rules/sync-workflow.md`（同步條件表 + Guardian 閘門）
+### GIT / 同步流程
+→ 詳見 `rules/sync-workflow.md`（必經處：同步條件表 + 秘密洩漏檢查 + Guardian 閘門）
+→ 「上GIT」縮寫定義見 `memory/preferences.md`
 
 ## 行動
 

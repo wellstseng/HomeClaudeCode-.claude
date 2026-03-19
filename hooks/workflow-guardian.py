@@ -874,6 +874,33 @@ def _proactive_classify(
     return lines
 
 
+# ─── MCP Server Health Check ─────────────────────────────────────────────────
+
+
+def _check_mcp_servers() -> List[str]:
+    """Verify .mcp.json server entries: command + script must exist on disk."""
+    issues: List[str] = []
+    mcp_path = CLAUDE_DIR / ".mcp.json"
+    if not mcp_path.exists():
+        return []
+    try:
+        with open(mcp_path, "r", encoding="utf-8") as f:
+            mcp_cfg = json.loads(f.read())
+        servers = mcp_cfg.get("mcpServers", {})
+        for name, srv in servers.items():
+            cmd = srv.get("command", "")
+            args = srv.get("args", [])
+            if cmd and not Path(cmd).exists():
+                issues.append(f"{name}: command not found ({cmd})")
+            if args:
+                script = args[0]
+                if not Path(script).exists():
+                    issues.append(f"{name}: script not found ({script})")
+    except Exception as e:
+        issues.append(f"parse error: {e}")
+    return issues
+
+
 # ─── Vector Service Helpers ───────────────────────────────────────────────────
 
 
@@ -1092,6 +1119,14 @@ def handle_session_start(input_data: Dict[str, Any], config: Dict[str, Any]) -> 
             )
     except Exception as e:
         print(f"[dual-backend] Long DIE check error: {e}", file=sys.stderr)
+
+    # ── MCP Server health check ──────────────────────────────────────
+    try:
+        mcp_issues = _check_mcp_servers()
+        if mcp_issues:
+            lines.append("[MCP] " + "; ".join(mcp_issues))
+    except Exception as e:
+        print(f"[mcp-health] Check error: {e}", file=sys.stderr)
 
     # CRITICAL: write state + output BEFORE warmup, so even if warmup
     # times out (and hook gets killed), state file exists for subsequent hooks.
