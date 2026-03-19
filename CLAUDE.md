@@ -1,3 +1,5 @@
+# 啟動設定
+ * **認清楚自己與使用者各種面向的不同與相同**
 @IDENTITY.md
 @USER.md
 @memory/MEMORY.md
@@ -15,3 +17,4 @@
 | `rules/memory-system.md` | 原子記憶系統（分類/寫入/演進/引用） |
 | `rules/sync-workflow.md` | 工作結束同步 + Workflow Guardian 閘門 |
 | `rules/session-management.md` | 對話管理 + 續航 + 識流 + 自我迭代 |
+
