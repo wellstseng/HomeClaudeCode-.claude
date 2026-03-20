@@ -1671,6 +1671,21 @@ def handle_post_tool_use(input_data: Dict[str, Any], config: Dict[str, Any]) -> 
         if "/memory/" in normalized and normalized.endswith(".md"):
             _trigger_incremental_index(config)
 
+        # V2.15: _AIDocs content classification gate — warn on temporary files
+        if "/_AIDocs/" in normalized or "/_aidocs/" in normalized.lower():
+            fname = normalized.rsplit("/", 1)[-1]
+            _TEMP_PATTERNS = re.compile(
+                r"(?i)(plan|todo|roadmap|draft|wip|scratch|調查|規劃|暫存)"
+                r"|phase[- _]?\d"
+            )
+            if _TEMP_PATTERNS.search(fname):
+                state["_aidocs_advisory"] = (
+                    f"⚠ {fname} 看起來是暫時性文件，"
+                    f"建議放 memory/_staging/ 而非 _AIDocs/。"
+                    f"判斷基準：實作完成後是否仍有長期參考價值？"
+                )
+                print(f"[v2.15] AIDocs gate triggered: {fname}", file=sys.stderr)
+
     elif tool_name == "Read" and file_path:
         # V2.10: Read Tracking — deduplicate, keep first occurrence only
         accessed = state.setdefault("accessed_files", [])
@@ -1686,7 +1701,19 @@ def handle_post_tool_use(input_data: Dict[str, Any], config: Dict[str, Any]) -> 
             vcs.append({"command": command[:200], "at": _now_iso()})
             write_state(session_id, state)
 
-    output_nothing()
+    # V2.15: Output advisory if _AIDocs gate triggered
+    advisory = state.get("_aidocs_advisory") if state else None
+    if advisory:
+        del state["_aidocs_advisory"]
+        write_state(session_id, state)
+        output_json({
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": f"[Guardian:AIDocs] {advisory}",
+            }
+        })
+    else:
+        output_nothing()
 
 
 def handle_pre_compact(input_data: Dict[str, Any], config: Dict[str, Any]) -> None:

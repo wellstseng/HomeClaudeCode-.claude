@@ -3,8 +3,8 @@
 - Scope: global
 - Confidence: [固]
 - Trigger: 全域決策, workflow, guardian, hooks, MCP, 記憶系統決策, 記憶系統架構
-- Last-used: 2026-03-19
-- Confirmations: 63
+- Last-used: 2026-03-21
+- Confirmations: 66
 - Type: decision
 - Related: decisions-architecture
 
@@ -38,6 +38,7 @@
 - [固] Write Gate：品質閘門，dedup 0.80，使用者明確指示時跳過
 - [固] 衝突偵測：SessionEnd 對修改 atoms 做向量搜尋，寫入 episodic 警告
 - [固] 自我迭代精簡為 3 條：品質函數（Hook）、證據門檻（Claude）、震盪偵測（Hook）
+- [固] AIDocs 內容閘門：PostToolUse 偵測 _AIDocs/ 下暫時性檔名（Plan/TODO/Roadmap/Draft 等）→ additionalContext 警告（不硬擋）
 
 ### Wisdom Engine
 - [固] 2 硬規則（file_count+is_feature → confirm; touches_arch+file_count → plan）
