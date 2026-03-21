@@ -6,6 +6,7 @@
 
 | 日期 | 變更 | 涉及檔案 |
 |------|------|---------|
+| 2026-03-21 | **feat: pending-tasks 自動存檔規則 + Guardian 偵測**：session-management.md 新增多步驟任務自動存檔規則。Guardian resume 時偵測 `_staging/pending-tasks.md` + `next-phase.md`，自動注入上下文 | `rules/session-management.md`, `hooks/workflow-guardian.py`, `memory/doc-index-system.md` |
 | 2026-03-20 | **fix: Session resume 上下文遺失**：resume 時 `session_context_injected` 未重置導致 episodic 不會重新注入。追加 topic_tracker 主題資訊 + `_staging/next-phase.md` 自動偵測注入 | `hooks/workflow-guardian.py` |
 | 2026-03-19 | **V2.15 定義版本**：全文件版本號 V2.12→V2.15 統一。移除內嵌版本標註（已是標準功能的 V2.x 標籤）。README 版本歷史補 V2.13/V2.14/V2.15。Architecture/DocIndex/Project_File_Tree 版本清理。CHANGELOG 補完 V2.12~V2.14 間缺漏變更 | `CLAUDE.md`, `README.md`, `Install-forAI.md`, `_AIDocs/*.md`, `memory/decisions*.md`, `rules/session-management.md` |
 | 2026-03-19 | **V2.14 Token Diet**：`_strip_atom_for_injection()` 注入前 strip 9 種 metadata + 行動/演化日誌。SessionEnd 從 byte_offset 跳已萃取段。cross-session lazy search 預篩。省 ~1550 tok/session | `hooks/workflow-guardian.py`, `hooks/extract-worker.py`, `memory/MEMORY.md`, `workflow/config.json` |

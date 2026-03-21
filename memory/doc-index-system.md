@@ -6,7 +6,7 @@
 - Trigger: 系統架構, 檔案結構, file tree, architecture, hook, skill, tool, 升級, upgrade, 迭代, self-understand
 - Last-used: 2026-03-21
 - Created: 2026-03-13
-- Confirmations: 34
+- Confirmations: 36
 - Tags: doc-index, system-overview
 - Related: decisions, decisions-architecture, toolchain
 
@@ -45,9 +45,9 @@
 
 | 檔案 | 用途 |
 |------|------|
-| `workflow-guardian.py` (~2900 行) | 統一 dispatcher：6 event handlers + failure detection |
-| `extract-worker.py` (~530 行) | SessionEnd/per-turn/failure 子程序：LLM 萃取 + dedup + failure writeback |
-| `wisdom_engine.py` (~195 行) | 反思引擎：硬規則 + 反思指標 |
+| `workflow-guardian.py` (~3200 行) | 統一 dispatcher：6 event handlers + failure detection + pending-tasks 偵測 |
+| `extract-worker.py` (~760 行) | SessionEnd/per-turn/failure 子程序：LLM 萃取 + dedup + failure writeback |
+| `wisdom_engine.py` (~200 行) | 反思引擎：硬規則 + 反思指標 |
 | `user-init.sh` (~20 行) | 多人 USER.md 初始化 |
 
 ### Skills（commands/）
