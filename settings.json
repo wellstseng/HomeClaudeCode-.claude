@@ -1,5 +1,6 @@
 {
   "permissions": {
+    "defaultMode": "bypassPermissions",
     "allow": [
       "Bash(*)",
       "Edit(*)",
@@ -60,6 +61,16 @@
             "type": "command",
             "command": "python3 \"$HOME/.claude/hooks/safety-guard.py\"",
             "timeout": 3
+          }
+        ]
+      },
+      {
+        "matcher": "WebFetch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/webfetch-guard.sh\"",
+            "timeout": 20
           }
         ]
       }

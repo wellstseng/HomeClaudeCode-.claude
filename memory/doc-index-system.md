@@ -6,7 +6,7 @@
 - Trigger: 系統架構, 檔案結構, file tree, architecture, hook, skill, tool, 升級, upgrade, 迭代, self-understand
 - Last-used: 2026-03-23
 - Created: 2026-03-13
-- Confirmations: 39
+- Confirmations: 47
 - Tags: doc-index, system-overview
 - Related: decisions, decisions-architecture, toolchain
 
@@ -30,7 +30,7 @@
 | `BOOTSTRAP.md` | 首次設定引導 |
 | `settings.json` | Hook 綁定 + 權限 + MCP |
 | `.mcp.json` | MCP server 定義 |
-| `workflow/config.json` | Guardian/Vector/WriteGate/Capture 參數 |
+| `workflow/config.json` | Guardian/Vector/WriteGate/Capture/SelfIteration 參數 |
 
 ### 規則模組（rules/）
 
@@ -45,9 +45,9 @@
 
 | 檔案 | 用途 |
 |------|------|
-| `workflow-guardian.py` (~3200 行) | 統一 dispatcher：6 event handlers + failure detection + pending-tasks 偵測 |
-| `extract-worker.py` (~760 行) | SessionEnd/per-turn/failure 子程序：LLM 萃取 + dedup + failure writeback |
-| `wisdom_engine.py` (~200 行) | 反思引擎：硬規則 + 反思指標 |
+| `workflow-guardian.py` (~3500 行) | 統一 dispatcher：6 event handlers + failure detection + 覆轍偵測 |
+| `extract-worker.py` (~530 行) | SessionEnd/per-turn/failure 子程序：LLM 萃取 + dedup + failure writeback |
+| `wisdom_engine.py` (~195 行) | 反思引擎：硬規則 + 反思指標 |
 | `user-init.sh` (~20 行) | 多人 USER.md 初始化 |
 
 ### Skills（commands/）
@@ -117,3 +117,5 @@
 | 2026-03-13 | 初始建立 | /read-project |
 | 2026-03-19 | 精修：純索引化，移除架構描述，去重 decisions | 系統精修 |
 | 2026-03-19 | 更新 extract-worker/guardian 行數+功能（v2.13 failure mode） | failures 自動化 |
+| 2026-03-22 | config.json 欄位更新（self_iteration 區塊） | V2.16 文件同步 |
+| 2026-03-22 | guardian 行數更新 ~3500 + 覆轍偵測標記 | V2.17 覆轍偵測 |

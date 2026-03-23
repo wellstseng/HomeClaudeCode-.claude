@@ -3,7 +3,7 @@
 - Scope: global
 - Confidence: [固]
 - Trigger: ollama, dual-backend, rdchat, qwen3, embedding, 萃取品質, thinking, failover, Open WebUI
-- Last-used: 2026-03-21
+- Last-used: 2026-03-22
 - Created: 2026-03-19
 - Confirmations: 63
 - Type: procedural
