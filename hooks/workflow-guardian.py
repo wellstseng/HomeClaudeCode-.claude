@@ -22,6 +22,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# ─── 確保模組搜尋路徑包含 hooks/ 目錄（runpy.run_path 不會自動加）─────────
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 # ─── wg_core: shared constants, config, state I/O, output, debug ────────────
 from wg_core import (
     CLAUDE_DIR, WORKFLOW_DIR, MEMORY_DIR, EPISODIC_DIR, CONFIG_PATH,
