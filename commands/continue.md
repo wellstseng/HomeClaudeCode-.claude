@@ -17,24 +17,16 @@
 
 ## Step 1: 檢查暫存區
 
-用 **Read tool**（不是 Glob）直接讀取以下絕對路徑：
+從系統 context 的 "Additional working directories" 或 CWD 推算專案 slug，用 **Read tool** 直接讀取：
 
 ```
-~/.claude/projects/MEMORY.md
+~/.claude/projects/{slug}/memory/_staging/next-phase.md
 ```
 
-從 MEMORY.md 所在目錄推算 staging 路徑，然後用 Read tool 讀取：
+> `{slug}` 由 CWD 路徑轉換：小寫、`/` → `-`、`:` → ``。
+> 例：CWD `C:\Projects\MyApp` → slug `c--Projects-MyApp` → 讀 `~/.claude/projects/c--Projects-MyApp/memory/_staging/next-phase.md`
 
-```
-{MEMORY.md 所在目錄}/_staging/next-phase.md
-```
-
-> 例：如果 MEMORY.md 在 `~/.claude/projects/c--Projects/memory/MEMORY.md`，
-> 則讀 `~/.claude/projects/c--Projects/memory/_staging/next-phase.md`
-
-**重要**：不要用 Glob 搜尋。直接用 Read tool 讀絕對路徑。路徑在系統 context 的 "Additional working directories" 中可以找到 memory 目錄的位置。
-
-**每個專案有獨立的 staging 區**，確保不同專案的續接互不干擾。
+**重要**：不要用 Glob 搜尋。直接用 Read tool 讀絕對路徑。每個專案有獨立的 staging 區，確保不同專案的續接互不干擾。
 
 ### 分流
 
