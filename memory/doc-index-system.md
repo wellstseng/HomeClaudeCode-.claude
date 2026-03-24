@@ -4,10 +4,10 @@
 - Confidence: [固]
 - Type: semantic
 - Trigger: 系統架構, 檔案結構, file tree, architecture, hook, skill, tool, 升級, upgrade, 迭代, self-understand
-- Last-used: 2026-03-23
+- Last-used: 2026-03-24
 - Updated: 2026-03-23
 - Created: 2026-03-13
-- Confirmations: 32
+- Confirmations: 39
 - Tags: doc-index, system-overview
 - Related: decisions, decisions-architecture, toolchain
 
@@ -67,6 +67,8 @@
 | `/fix-escalation` | 精確修正升級（6 Agent） | 無 |
 | `/harvest` | 網頁收割 → Markdown | Playwright |
 | `/init-project` | 專案知識庫初始化 | 無 |
+| `/memory-health` | 記憶品質診斷（audit + health-check 合併） | 無 |
+| `/memory-review` | 自我迭代檢閱（衰減/晉升/震盪/覆轍/episodic） | 無 |
 | `/read-project` | 系統性讀取 → doc-index | 無 |
 | `/resume` | 續接 + 自動開新 session | MCPControl |
 | `/svn-update` | SVN 更新 + 衝突處理 | TortoiseSVN |
