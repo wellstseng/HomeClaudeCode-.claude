@@ -3,11 +3,11 @@
 - Scope: global
 - Confidence: [固]
 - Type: semantic
-- Trigger: 系統架構, 檔案結構, file tree, architecture, hook, skill, tool, 升級, upgrade, 迭代, self-understand
+- Trigger: 系統架構, 檔案結構, hook, skill, tool, 升級, 迭代, 目錄結構
 - Last-used: 2026-03-24
 - Updated: 2026-03-23
 - Created: 2026-03-13
-- Confirmations: 43
+- Confirmations: 45
 - Tags: doc-index, system-overview
 - Related: decisions, decisions-architecture, toolchain
 

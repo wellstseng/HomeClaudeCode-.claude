@@ -3,10 +3,12 @@
 - Scope: global
 - Confidence: [固]
 - Trigger: harvester, Google Docs, Sheets, 收割, Playwright, cookie, export
-- Last-used: 2026-03-23
-- Confirmations: 15
+- Last-used: 2026-03-24
+- Confirmations: 16
 
-## Web Harvester
+## 知識
+
+### Web Harvester
 
 **位置**: `~/.claude/tools/gdoc-harvester/`（技能本體，可上 GIT）
 **Skill**: `/harvest`（`~/.claude/commands/harvest.md`）
@@ -78,5 +80,7 @@ classify_url(url) → (key, type) | None
 - browser-data（含所有網站 cookies）存在 runtime 工作目錄，不進 git
 - Skill 流程提醒使用者事後清理敏感資料
 
-**Why:** 使用者要把散落在 Google Drive / GitLab / 各處的公司文件整理收割
-**How to apply:** `/harvest` skill 使用或後續改進時參考
+## 行動
+
+- 使用或改進 `/harvest` skill 時參考踩坑記錄
+- 新增平台支援時，先確認 `classify_url()` + `CONTENT_SELECTORS` 涵蓋該平台

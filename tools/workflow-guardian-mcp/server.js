@@ -1135,6 +1135,12 @@ async function renderEpisodic() {
 
 let lastHealthData = null;
 
+function toggleHealthInfo() {
+  document.querySelectorAll('.health-info-row').forEach(r => {
+    r.style.display = r.style.display === 'none' ? '' : 'none';
+  });
+}
+
 async function renderHealth(force) {
   const el = document.getElementById("healthContent");
   try {
@@ -1158,15 +1164,27 @@ async function renderHealth(force) {
     html += '<div class="health-stat"><div class="val">' + (data.distant_count||0) + '</div><div class="lbl">疏遠區</div></div>';
     html += '</div>';
 
-    // Issues
+    // Issues — grouped by severity
     const issues = data.issues || [];
+    const errCount = issues.filter(i => i.level === "error").length;
+    const warnCount = issues.filter(i => i.level === "warning").length;
+    const infoCount = issues.filter(i => i.level === "info").length;
     if (issues.length) {
-      html += '<div class="section-title">問題 (' + issues.length + ')</div>';
+      html += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">' +
+        '<span class="section-title">問題</span>' +
+        (errCount ? '<span style="color:#f85149;font-weight:bold">' + errCount + ' error</span>' : '') +
+        (warnCount ? '<span style="color:#d2a826;font-weight:bold">' + warnCount + ' warning</span>' : '') +
+        (infoCount ? '<span style="color:#8b949e">' + infoCount + ' info</span>' : '') +
+        '<button class="btn" style="font-size:0.75em;padding:2px 8px" onclick="toggleHealthInfo()">顯示/隱藏 info</button>' +
+        '</div>';
       html += '<table class="issue-table"><tr><th>等級</th><th>分類</th><th>檔案</th><th>訊息</th></tr>';
       for (const i of issues) {
-        html += '<tr><td class="level-' + i.level + '">' + i.level + '</td><td>' + esc(i.category) + '</td><td style="font-family:monospace;font-size:0.85em">' + esc(i.file) + '</td><td>' + esc(i.message) + '</td></tr>';
+        const hideClass = i.level === "info" ? ' class="health-info-row" style="display:none"' : '';
+        html += '<tr' + hideClass + '><td class="level-' + i.level + '">' + i.level + '</td><td>' + esc(i.category) + '</td><td style="font-family:monospace;font-size:0.85em">' + esc(i.file) + '</td><td>' + esc(i.message) + '</td></tr>';
       }
       html += '</table>';
+    } else {
+      html += '<div style="color:#3fb950;margin-bottom:12px">✓ 無任何問題</div>';
     }
 
     // Promotions
