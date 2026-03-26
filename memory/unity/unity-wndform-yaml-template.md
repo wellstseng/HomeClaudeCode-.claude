@@ -1,9 +1,12 @@
----
-name: unity-wndform-yaml-template
-description: WndForm prefab YAML root structure template for programmatic creation
-type: reference
-related: unity-prefab-workflow
----
+# Unity WndForm Prefab YAML 模板
+
+- Scope: global
+- Confidence: [固]
+- Trigger: WndForm template, prefab YAML, RefDb, AutoGenUICode, Scroller stack, Canvas template, prefab 建立
+- Last-used: 2026-03-25
+- Confirmations: 2
+- Related: unity-yaml, unity-prefab-component-guids, unity-prefab-workflow
+
 
 ## WndForm Prefab Root Structure
 

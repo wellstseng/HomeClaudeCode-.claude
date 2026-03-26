@@ -3,8 +3,8 @@
 - Scope: global
 - Confidence: [固]
 - Trigger: 全域決策, workflow, guardian, hooks, MCP, 記憶系統決策, 記憶系統架構
-- Last-used: 2026-03-25
-- Confirmations: 90
+- Last-used: 2026-03-26
+- Confirmations: 100
 - Type: decision
 - Related: decisions-architecture
 
@@ -69,3 +69,4 @@
 - 2026-03-22: V2.16 自我迭代自動化決策記錄
 - 2026-03-22: V2.17 覆轍偵測 — 寄生式跨 session 重複失敗模式偵測
 - 2026-03-23: V2.17 合併升級至公司電腦
+- 2026-03-25: V2.18 反向參照自動修復 — SessionEnd 呼叫 atom-health-check.py --fix-refs（全域+專案層，冪等去重，10s timeout）
