@@ -31,7 +31,7 @@ from wg_paths import (
     MEMORY_INDEX,
     cwd_to_project_slug, get_project_memory_dir, find_project_root,
     resolve_episodic_dir, resolve_failures_dir, resolve_staging_dir,
-    resolve_access_json, discover_all_project_memory_dirs,
+    resolve_access_json, discover_all_project_memory_dirs, register_project,
 )
 # ─── wg_core: config, state I/O, output, debug ──────────────────────────────
 from wg_core import (
@@ -141,14 +141,8 @@ def handle_session_start(input_data: Dict[str, Any], config: Dict[str, Any]) -> 
         project_atoms = parse_memory_index(project_mem_dir) if project_mem_dir else []
         project_root = find_project_root(cwd)
 
-        # Merge shared atoms from _AIAtoms/_ATOM_INDEX.md (single source of truth)
-        if project_root:
-            atom_index_path = project_root / "_AIAtoms" / "_ATOM_INDEX.md"
-            if atom_index_path.exists():
-                shared_atoms = _parse_atom_index_file(atom_index_path)
-                if shared_atoms:
-                    existing_names = {a[0] for a in shared_atoms}
-                    project_atoms = [a for a in project_atoms if a[0] not in existing_names] + shared_atoms
+        # V2.21: Register project in registry (update last_seen)
+        register_project(cwd)
 
         state["atom_index"] = {
             "global": [(n, p, t) for n, p, t in global_atoms],

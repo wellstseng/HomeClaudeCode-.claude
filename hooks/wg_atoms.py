@@ -25,13 +25,26 @@ AtomEntry = Tuple[str, str, List[str]]
 
 
 def parse_memory_index(memory_dir: Path) -> List[AtomEntry]:
-    """Parse MEMORY.md atom index, return list of (name, path, triggers)."""
+    """Parse MEMORY.md atom index, return list of (name, path, triggers).
+
+    V2.21: 如果 MEMORY.md 是指標型（Status: migrated-v2.21），
+    自動重導向到 Root 指向的新路徑讀取。
+    """
     index_path = memory_dir / MEMORY_INDEX
     if not index_path.exists():
         return []
     try:
         text = index_path.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError):
+        return []
+
+    # V2.21: 指標型 MEMORY.md 重導向
+    if "Status: migrated-v2.21" in text:
+        root_m = re.search(r"^-\s+Root:\s*(.+)$", text, re.MULTILINE)
+        if root_m:
+            redirect_dir = Path(root_m.group(1).strip()) / ".claude" / "memory"
+            if redirect_dir.is_dir() and redirect_dir != memory_dir:
+                return parse_memory_index(redirect_dir)
         return []
 
     atoms: List[AtomEntry] = []

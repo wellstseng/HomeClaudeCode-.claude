@@ -40,7 +40,30 @@ process.on("SIGINT", () => {
 const MEMORY_DIR = path.join(CLAUDE_DIR, "memory");
 const TOOLS_DIR = path.join(CLAUDE_DIR, "tools");
 const CONFIG_PATH = path.join(WORKFLOW_DIR, "config.json");
+const REGISTRY_PATH = path.join(MEMORY_DIR, "project-registry.json");
 const DASHBOARD_PORT = loadConfig().dashboard_port || 3848;
+
+function loadRegistry() {
+  try {
+    return JSON.parse(fs.readFileSync(REGISTRY_PATH, "utf-8"));
+  } catch {
+    return { projects: {} };
+  }
+}
+
+/** Returns [{slug, memDir}] for all registered projects that have .claude/memory/ */
+function getRegistryMemDirs() {
+  const reg = loadRegistry();
+  const results = [];
+  for (const [slug, info] of Object.entries(reg.projects || {})) {
+    if (!info.root) continue;
+    const newMem = path.join(info.root, ".claude", "memory");
+    if (fs.existsSync(newMem)) {
+      results.push({ slug, memDir: newMem });
+    }
+  }
+  return results;
+}
 
 function loadConfig() {
   try {
@@ -551,12 +574,16 @@ function parseEpisodicAtom(filePath) {
 function apiEpisodic(req, res) {
   try {
     const dirsToScan = [MEMORY_DIR];
-    // Also scan project-level episodic dirs
+    // V2.21: scan registry project dirs (new path)
+    for (const { memDir } of getRegistryMemDirs()) {
+      if (!dirsToScan.includes(memDir)) dirsToScan.push(memDir);
+    }
+    // Also scan old project-level episodic dirs (fallback for unregistered projects)
     const projectsDir = path.join(CLAUDE_DIR, "projects");
     if (fs.existsSync(projectsDir)) {
       for (const proj of fs.readdirSync(projectsDir)) {
         const projMemDir = path.join(projectsDir, proj, "memory");
-        if (fs.existsSync(projMemDir)) dirsToScan.push(projMemDir);
+        if (fs.existsSync(projMemDir) && !dirsToScan.includes(projMemDir)) dirsToScan.push(projMemDir);
       }
     }
     const atoms = [];
@@ -759,33 +786,48 @@ function apiAtoms(req, res) {
     }
   }
 
-  // Also scan project memory dirs
+  // Helper: scan a project memory dir and push atoms
+  function scanProjMemDir(projMemDir, layerLabel) {
+    if (!fs.existsSync(projMemDir)) return;
+    for (const f of fs.readdirSync(projMemDir)) {
+      if (!f.endsWith(".md")) continue;
+      if (f === "MEMORY.md" || f.startsWith("_")) continue;
+      try {
+        const content = fs.readFileSync(path.join(projMemDir, f), "utf-8");
+        // Skip pointer-type MEMORY.md redirects
+        if (content.includes("Status: migrated-v2.21")) continue;
+        const atom = { name: f.replace(".md", ""), layer: layerLabel, file: f, content };
+        const metaRe = /^-\s+([\w-]+):\s*(.+)$/gm;
+        let m2;
+        while ((m2 = metaRe.exec(content)) !== null) {
+          const key = m2[1].toLowerCase(), val = m2[2].trim();
+          switch (key) {
+            case "confidence": atom.confidence = val; break;
+            case "last-used": atom.last_used = val; break;
+            case "confirmations": atom.confirmations = parseInt(val) || 0; break;
+            case "related": atom.related = val.split(",").map(t => t.trim()); break;
+          }
+        }
+        atom.line_count = content.split("\n").length;
+        atoms.push(atom);
+      } catch {}
+    }
+  }
+
+  // V2.21: scan registry project dirs (new path)
+  const seenProjDirs = new Set();
+  for (const { slug, memDir } of getRegistryMemDirs()) {
+    scanProjMemDir(memDir, "project:" + slug);
+    seenProjDirs.add(memDir);
+  }
+
+  // Also scan old project memory dirs (fallback for unregistered projects)
   const projectsDir = path.join(CLAUDE_DIR, "projects");
   if (fs.existsSync(projectsDir)) {
     for (const proj of fs.readdirSync(projectsDir)) {
       const projMemDir = path.join(projectsDir, proj, "memory");
-      if (!fs.existsSync(projMemDir)) continue;
-      for (const f of fs.readdirSync(projMemDir)) {
-        if (!f.endsWith(".md")) continue;
-        if (f === "MEMORY.md" || f.startsWith("_")) continue;
-        try {
-          const content = fs.readFileSync(path.join(projMemDir, f), "utf-8");
-          const atom = { name: f.replace(".md", ""), layer: "project:" + proj, file: f, content };
-          const metaRe = /^-\s+([\w-]+):\s*(.+)$/gm;
-          let m2;
-          while ((m2 = metaRe.exec(content)) !== null) {
-            const key = m2[1].toLowerCase(), val = m2[2].trim();
-            switch (key) {
-              case "confidence": atom.confidence = val; break;
-              case "last-used": atom.last_used = val; break;
-              case "confirmations": atom.confirmations = parseInt(val) || 0; break;
-              case "related": atom.related = val.split(",").map(t => t.trim()); break;
-            }
-          }
-          atom.line_count = content.split("\n").length;
-          atoms.push(atom);
-        } catch {}
-      }
+      if (seenProjDirs.has(projMemDir)) continue;
+      scanProjMemDir(projMemDir, "project:" + proj);
     }
   }
 

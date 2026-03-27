@@ -10,6 +10,7 @@ V2.21: 切換到 {project_root}/.claude/memory/（僅改此檔）
 
 import json
 import time
+from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -46,14 +47,17 @@ def find_project_root(cwd: str) -> Optional[Path]:
     """Walk up from CWD to find project root.
 
     辨識標記（優先順序）:
-    1. _AIDocs/ 目錄存在
-    2. .git 或 .svn 存在
+    1. .claude/memory/MEMORY.md 存在（V2.21 新增，專案自治目錄）
+    2. _AIDocs/ 目錄存在
+    3. .git 或 .svn 存在
     最多向上走 3 層。找不到則回傳 CWD 本身。
     """
     if not cwd:
         return None
     p = Path(cwd)
     for _ in range(4):  # cwd itself + max 3 levels up
+        if (p / ".claude" / "memory" / MEMORY_INDEX).exists():
+            return p
         if (p / "_AIDocs").is_dir():
             return p
         if (p / ".git").exists() or (p / ".svn").exists():
@@ -71,15 +75,21 @@ def find_project_root(cwd: str) -> Optional[Path]:
 def get_project_memory_dir(cwd: str) -> Optional[Path]:
     """Get project-level memory dir from CWD.
 
-    V2.20: 仍走 ~/.claude/projects/{slug}/memory/（行為等價）。
-    V2.21: 將切換到 {project_root}/.claude/memory/。
+    V2.21: 新路徑（{project_root}/.claude/memory/）優先，舊路徑 fallback。
     """
     if not cwd:
         return None
+    # V2.21: 新路徑優先
+    root = find_project_root(cwd)
+    if root:
+        new_mem = root / ".claude" / "memory"
+        if new_mem.is_dir() and (new_mem / MEMORY_INDEX).exists():
+            return new_mem
+    # fallback: 舊路徑（相容未遷移的專案）
     slug = cwd_to_project_slug(cwd)
-    project_mem = CLAUDE_DIR / "projects" / slug / "memory"
-    if project_mem.exists():
-        return project_mem
+    old_mem = CLAUDE_DIR / "projects" / slug / "memory"
+    if old_mem.exists():
+        return old_mem
     return None
 
 
@@ -164,6 +174,55 @@ def resolve_access_json(atom_name: str, atom_path: Path) -> Path:
     return atom_path.parent / f"{atom_name}.access.json"
 
 
+# ─── Project Registry (V2.21) ────────────────────────────────────────────────
+
+
+def _today() -> str:
+    return date.today().isoformat()
+
+
+def _load_registry() -> Dict[str, Any]:
+    if REGISTRY_PATH.exists():
+        try:
+            return json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {"projects": {}}
+
+
+def _save_registry(reg: Dict[str, Any]) -> None:
+    REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = REGISTRY_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(reg, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(REGISTRY_PATH)
+
+
+def register_project(cwd: str) -> None:
+    """SessionStart 時呼叫，更新 project-registry.json。
+
+    只有在找到真正的專案根（有辨識標記）才寫入，避免每個 cwd 都進 registry。
+    """
+    root = find_project_root(cwd)
+    if not root:
+        return
+    # 確認找到的是有標記的真實專案根，而非 fallback cwd
+    root_p = root
+    has_marker = (
+        (root_p / ".claude" / "memory" / MEMORY_INDEX).exists()
+        or (root_p / "_AIDocs").is_dir()
+        or (root_p / ".git").exists()
+        or (root_p / ".svn").exists()
+    )
+    if not has_marker:
+        return
+    slug = cwd_to_project_slug(str(root))
+    reg = _load_registry()
+    entry = reg.setdefault("projects", {}).setdefault(slug, {})
+    entry["root"] = str(root)
+    entry["last_seen"] = _today()
+    _save_registry(reg)
+
+
 # ─── Slug 指標檔 ──────────────────────────────────────────────────────────────
 
 
@@ -183,19 +242,44 @@ def get_slug_pointer_path(cwd: str) -> Path:
 def discover_all_project_memory_dirs() -> List[Tuple[str, Path]]:
     """Discover all project memory directories.
 
-    V2.20: 掃描 ~/.claude/projects/*/memory/（舊機制）。
-    V2.21: 將改為讀取 project-registry.json。
+    V2.21: registry-first，舊路徑掃描作為 fallback（過渡期相容）。
 
     Returns [(slug, memory_dir_path), ...]
     """
-    results = []
+    seen_slugs: set = set()
+    results: List[Tuple[str, Path]] = []
+
+    # Registry-based discovery (V2.21)
+    reg = _load_registry()
+    for slug, info in reg.get("projects", {}).items():
+        root = Path(info.get("root", ""))
+        if not root.is_dir():
+            continue
+        # 優先新路徑
+        new_mem = root / ".claude" / "memory"
+        if new_mem.is_dir() and (new_mem / MEMORY_INDEX).exists():
+            results.append((slug, new_mem))
+            seen_slugs.add(slug)
+            continue
+        # 舊路徑 fallback
+        old_mem = CLAUDE_DIR / "projects" / slug / "memory"
+        if old_mem.is_dir():
+            results.append((slug, old_mem))
+            seen_slugs.add(slug)
+
+    # 掃描舊路徑補充（過渡期：registry 尚未收錄的專案）
     projects_dir = CLAUDE_DIR / "projects"
     if projects_dir.is_dir():
         for proj_dir in sorted(projects_dir.iterdir()):
-            if proj_dir.is_dir():
-                mem = proj_dir / "memory"
-                if mem.is_dir():
-                    results.append((proj_dir.name, mem))
+            if not proj_dir.is_dir():
+                continue
+            slug = proj_dir.name
+            if slug in seen_slugs:
+                continue
+            mem = proj_dir / "memory"
+            if mem.is_dir():
+                results.append((slug, mem))
+
     return results
 
 
