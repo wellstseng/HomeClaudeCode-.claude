@@ -3,8 +3,8 @@
 - Scope: global
 - Confidence: [固]
 - Trigger: 寫入記憶, 暫存, _staging, memory path, 寫atom, 寫檔案, Write memory
-- Last-used: 2026-03-30
-- Confirmations: 1
+- Last-used: 2026-03-31
+- Confirmations: 2
 - Related: decisions, doc-index-system
 
 ## 知識

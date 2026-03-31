@@ -960,6 +960,21 @@ def handle_pre_compact(input_data: Dict[str, Any], config: Dict[str, Any]) -> No
 
     # Mark snapshot for recovery after compaction
     state["pre_compact_snapshot"] = _now_iso()
+
+    # V2.22: Episodic checkpoint — generate episodic here because SessionEnd
+    # often doesn't fire (user closes window / context limit / VSCode reload).
+    # Only once per session to avoid duplicates.
+    if not state.get("episodic_checkpoint_done"):
+        ep_cfg = config.get("episodic", {})
+        if ep_cfg.get("auto_generate", True) and _should_generate_episodic(state, config):
+            try:
+                result = _generate_episodic_atom(session_id, state, config)
+                if result:
+                    state["episodic_checkpoint_done"] = True
+                    print(f"[v2.22] episodic checkpoint: {result}", file=sys.stderr)
+            except Exception as e:
+                print(f"[v2.22] episodic checkpoint failed: {e}", file=sys.stderr)
+
     write_state(session_id, state)
     output_nothing()
 
@@ -1201,9 +1216,9 @@ def handle_session_end(input_data: Dict[str, Any], config: Dict[str, Any]) -> No
     except Exception as e:
         print(f"[v2.18] fix-refs error: {e}", file=sys.stderr)
 
-    # v2.1 Task #2: Auto-generate episodic atom
-    episodic_generated = False
-    if config.get("episodic", {}).get("auto_generate", True):
+    # v2.1 Task #2: Auto-generate episodic atom (skip if PreCompact already did it)
+    episodic_generated = state.get("episodic_checkpoint_done", False)
+    if not episodic_generated and config.get("episodic", {}).get("auto_generate", True):
         try:
             _generate_episodic_atom(session_id, state, config)
             episodic_generated = True

@@ -18,11 +18,15 @@ const CLAUDE_DIR = path.join(require("os").homedir(), ".claude");
 const WORKFLOW_DIR = path.join(CLAUDE_DIR, "workflow");
 const CRASH_LOG = path.join(WORKFLOW_DIR, "guardian-crash.log");
 
+let _crashLogging = false;
 function crashLog(label, err) {
+  if (_crashLogging) return;          // re-entry guard: prevent EPIPE cascade
+  _crashLogging = true;
   const ts = new Date().toISOString();
   const msg = `[${ts}] ${label}: ${err?.stack || err}\n`;
   try { fs.appendFileSync(CRASH_LOG, msg); } catch {}
-  process.stderr.write(`[workflow-guardian] ${label}: ${err?.message || err}\n`);
+  try { process.stderr.write(`[workflow-guardian] ${label}: ${err?.message || err}\n`); } catch {}
+  _crashLogging = false;
 }
 
 process.on("uncaughtException", (err) => {
