@@ -16,6 +16,8 @@
 | 5 | ../README.md | 完整運作知識庫 + 7 階段流程圖（GitHub 入口） | 設計哲學, 安裝, 入門, 流程圖, 使用方式 |
 | 6 | DocIndex-System.md | 全檔系統索引（啟動鏈 + Hook 模組 + 16 Skills + Tools + Memory 25 atoms） | 啟動鏈, lifecycle, 全檔索引, 檔案清單, 系統索引 |
 | 7 | ClaudeCodeInternals/_INDEX.md | Claude Code 原生架構深度分析（14 章：Harness Engineering 全書） | claude code 架構, harness engineering, tool system, hook system, agent, permission, prompt, MCP, skill, plugin, feature flag, query loop, context, state |
+| 8 | Tools/_INDEX.md | 工具與領域知識（Excel 操作、Unity YAML/Prefab、記憶系統檔案索引） | Excel, xlsx, openpyxl, Unity YAML, fileID, GUID, prefab, WndForm, 記憶系統架構, 檔案結構, 目錄結構 |
+| 9 | Failures/_INDEX.md | 踩坑記錄與失敗模式（環境陷阱、假設錯誤、靜默失敗、認知偏差、誤診） | 環境陷阱, Windows, MSYS2, npx, Ollama, 假設錯誤, 靜默, 過度工程, 誤診, 驗證優先 |
 
 ---
 
