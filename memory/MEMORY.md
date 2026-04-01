@@ -27,3 +27,10 @@
 | feedback-no-test-to-svn | memory/feedback_no_test_to_svn.md | 上SVN, svn commit, 測試碼, 新手作業, 練習, 不可上傳 |
 | feedback-global-install | memory/feedback_global_install.md | 安裝MCP, 安裝skill, install MCP, install skill, add MCP, 新增MCP, 新增skill |
 | feedback-memory-path | memory/feedback_memory_path.md | 寫入記憶, 暫存, _staging, memory path, 寫atom, Write memory, 記憶路徑 |
+| feedback-knowledge-org | memory/feedback_knowledge_organization.md | 知識庫組織, 檔案放哪, _AIDocs vs memory, 新增知識, atom 放哪 |
+
+> **_AIDocs 知識庫導航**（細節知識查閱入口，請讀 `_AIDocs/_INDEX.md`）
+
+| 知識庫 | 路徑 | 涵蓋主題 |
+|--------|------|----------|
+| Claude Code Internals | _AIDocs/ClaudeCodeInternals/_INDEX.md | harness engineering, tool system, hook, agent, permission, prompt, MCP, skill, plugin, feature flag, query loop, context, state, 設計模式 |

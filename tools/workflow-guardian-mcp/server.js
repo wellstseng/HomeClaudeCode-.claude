@@ -10,6 +10,7 @@
 const fs = require("fs");
 const path = require("path");
 const http = require("http");
+const https = require("https");
 const { exec } = require("child_process");
 
 // ─── Crash protection & logging ─────────────────────────────────────────────
@@ -718,6 +719,115 @@ function apiVectorStatus(req, res) {
   proxyReq.end();
 }
 
+// --- Ollama Backends Status (30s server-side cache) ---
+
+let _ollamaCache = { data: null, ts: 0 };
+const OLLAMA_CACHE_TTL = 30000; // 30s
+
+function apiOllamaBackendsStatus(req, res) {
+  const now = Date.now();
+  if (_ollamaCache.data && (now - _ollamaCache.ts) < OLLAMA_CACHE_TTL) {
+    return jsonRes(res, 200, _ollamaCache.data);
+  }
+
+  const cfg = loadConfig();
+  const backends = cfg.vector_search?.ollama_backends || {};
+  const names = Object.keys(backends);
+  if (!names.length) return jsonRes(res, 200, { backends: [], cached: false });
+
+  // Read long_die marker
+  let longDie = null;
+  try {
+    const marker = fs.readFileSync(path.join(WORKFLOW_DIR, ".backend_long_die.json"), "utf-8");
+    longDie = JSON.parse(marker);
+  } catch {}
+
+  // Read auth token for rdchat
+  let rdchatToken = null;
+  try {
+    const tf = fs.readFileSync(path.join(WORKFLOW_DIR, ".rdchat_token.json"), "utf-8");
+    rdchatToken = JSON.parse(tf).token;
+  } catch {}
+
+  const results = [];
+  let pending = names.length;
+
+  function finish() {
+    if (--pending > 0) return;
+    const payload = { backends: results, long_die: longDie, cached: false, checked_at: now };
+    _ollamaCache = { data: { ...payload, cached: true }, ts: now };
+    payload.cached = false;
+    jsonRes(res, 200, payload);
+  }
+
+  for (const name of names) {
+    const b = backends[name];
+    const entry = {
+      name,
+      base_url: b.base_url,
+      llm_model: b.llm_model || "?",
+      embedding_model: b.embedding_model || "?",
+      priority: b.priority || 99,
+      enabled: b.enabled !== false,
+      status: "unknown",
+      latency_ms: null,
+      long_die: longDie && longDie.backend === name ? longDie : null,
+    };
+
+    if (!entry.enabled) {
+      entry.status = "disabled";
+      results.push(entry);
+      finish();
+      continue;
+    }
+
+    const url = new URL(b.base_url.replace(/\/+$/, "") + "/api/tags");
+    const isHttps = url.protocol === "https:";
+    const mod = isHttps ? https : http;
+    const headers = {};
+    if (b.auth && rdchatToken) {
+      headers["Authorization"] = "Bearer " + rdchatToken;
+    }
+    const t0 = Date.now();
+    const opts = {
+      hostname: url.hostname,
+      port: url.port || (isHttps ? 443 : 80),
+      path: url.pathname + url.search,
+      method: "GET",
+      headers,
+      timeout: 5000,
+      rejectUnauthorized: false,
+    };
+
+    const probe = mod.request(opts, (probeRes) => {
+      // Drain response body
+      probeRes.on("data", () => {});
+      probeRes.on("end", () => {
+        entry.latency_ms = Date.now() - t0;
+        entry.status = probeRes.statusCode === 200 ? "online"
+                     : probeRes.statusCode === 401 ? "auth_expired"
+                     : "error_" + probeRes.statusCode;
+        results.push(entry);
+        finish();
+      });
+    });
+    probe.on("error", () => {
+      entry.latency_ms = Date.now() - t0;
+      entry.status = "offline";
+      results.push(entry);
+      finish();
+    });
+    probe.on("timeout", () => {
+      probe.destroy();
+      entry.latency_ms = Date.now() - t0;
+      entry.status = "timeout";
+      results.push(entry);
+      finish();
+    });
+    probe.end();
+  }
+}
+
 // --- Knowledge Queue Aggregation ---
 
 function apiKnowledgeQueue(req, res) {
@@ -1008,6 +1118,13 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
   .status-online { background: #3fb950; }
   .status-offline { background: #f85149; }
+  .status-warn { background: #d2a826; }
+  .status-disabled { background: #484f58; }
+  .backend-card { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 14px; }
+  .backend-card .bc-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .backend-card .bc-name { font-weight: 600; font-size: 0.95em; }
+  .backend-card .bc-tag { font-size: 0.75em; padding: 1px 6px; border-radius: 3px; background: #30363d; color: #8b949e; }
+  .backend-card .bc-tag.pri { background: #58a6ff22; color: #58a6ff; }
   .section-title { font-size: 1em; font-weight: 600; color: #e6edf3; margin-bottom: 10px; }
   /* Atoms */
   .atom-table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
@@ -1099,11 +1216,13 @@ let testPollTimer = null;
 
 document.querySelectorAll(".tab-btn").forEach(btn => {
   btn.addEventListener("click", () => {
+    const prevTab = currentTab;
     currentTab = btn.dataset.tab;
     document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
     btn.classList.add("active");
     document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
     document.getElementById("panel" + currentTab.charAt(0).toUpperCase() + currentTab.slice(1)).classList.add("active");
+    if (prevTab === "vector" && currentTab !== "vector") stopBackendsPolling();
     refreshCurrentTab();
   });
 });
@@ -1445,13 +1564,80 @@ function renderTestResults(job) {
 
 // ─── Vector Status ───
 
+let _backendsHtml = "";  // cached backend HTML (refreshed independently)
+let _backendsTimer = null;
+
+async function fetchBackendsStatus() {
+  try {
+    const r = await fetch("/api/ollama-backends-status");
+    const d = await r.json();
+    const bs = (d.backends || []).sort((a,b) => a.priority - b.priority);
+    if (!bs.length) { _backendsHtml = ""; return; }
+
+    const statusMap = {
+      online: { dot: "status-online", label: "線上", color: "#3fb950" },
+      offline: { dot: "status-offline", label: "離線", color: "#f85149" },
+      timeout: { dot: "status-offline", label: "逾時", color: "#f85149" },
+      auth_expired: { dot: "status-warn", label: "Token 過期", color: "#d2a826" },
+      disabled: { dot: "status-disabled", label: "停用", color: "#484f58" },
+    };
+    const checkedAt = d.checked_at ? new Date(d.checked_at).toLocaleTimeString() : "?";
+    const cached = d.cached ? ' <span style="color:#484f58;font-size:0.75em">(快取)</span>' : "";
+
+    let html = '<div style="margin-top:16px"><h3 style="font-size:0.95em;color:#e6edf3;margin-bottom:8px">Ollama 後端' + cached + ' <span style="color:#484f58;font-size:0.75em;font-weight:normal">最後檢查 ' + checkedAt + '</span></h3>';
+
+    // Long DIE warning
+    if (d.long_die) {
+      html += '<div style="background:#d2a82622;border:1px solid #d2a82644;border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:0.85em;color:#d2a826">';
+      html += '⚠ ' + esc(d.long_die.backend) + ' 長期停用至 ' + esc(d.long_die.until||"?") + '：' + esc(d.long_die.message||"");
+      html += '</div>';
+    }
+
+    html += '<div class="vec-grid">';
+    for (const b of bs) {
+      const s = statusMap[b.status] || { dot: "status-warn", label: b.status, color: "#d2a826" };
+      const isRemote = !b.base_url.includes("127.0.0.1") && !b.base_url.includes("localhost");
+      html += '<div class="backend-card">';
+      html += '<div class="bc-header"><span class="status-dot ' + s.dot + '"></span>';
+      html += '<span class="bc-name">' + esc(b.name) + '</span>';
+      html += '<span class="bc-tag pri">P' + b.priority + '</span>';
+      html += '<span class="bc-tag">' + (isRemote ? "遠端" : "本機") + '</span>';
+      html += '</div>';
+      html += '<div class="vec-row"><span class="k">狀態</span><span class="v" style="color:' + s.color + '">' + s.label;
+      if (b.latency_ms != null && b.status === "online") html += ' (' + b.latency_ms + 'ms)';
+      html += '</span></div>';
+      html += '<div class="vec-row"><span class="k">URL</span><span class="v" style="font-size:0.8em;word-break:break-all">' + esc(b.base_url) + '</span></div>';
+      html += '<div class="vec-row"><span class="k">LLM</span><span class="v">' + esc(b.llm_model) + '</span></div>';
+      html += '<div class="vec-row"><span class="k">Embedding</span><span class="v">' + esc(b.embedding_model) + '</span></div>';
+      if (b.long_die) {
+        html += '<div class="vec-row"><span class="k">DIE 狀態</span><span class="v" style="color:#d2a826">長期停用至 ' + esc(b.long_die.until||"?") + '</span></div>';
+      }
+      html += '</div>';
+    }
+    html += '</div></div>';
+    _backendsHtml = html;
+  } catch (e) {
+    _backendsHtml = '<div style="margin-top:16px;color:#8b949e;font-size:0.85em">Ollama 後端狀態載入失敗：' + esc(e.message) + '</div>';
+  }
+}
+
+function startBackendsPolling() {
+  if (_backendsTimer) return;
+  fetchBackendsStatus();
+  _backendsTimer = setInterval(fetchBackendsStatus, 30000);
+}
+function stopBackendsPolling() {
+  if (_backendsTimer) { clearInterval(_backendsTimer); _backendsTimer = null; }
+}
+
 async function renderVector() {
   const el = document.getElementById("vectorContent");
+  startBackendsPolling();
   try {
     const r = await fetch("/api/vector-status");
     const d = await r.json();
     if (d.error) {
-      el.innerHTML = '<div class="card" style="text-align:center;padding:24px"><span class="status-dot status-offline"></span><strong style="color:#f85149">離線</strong><br><span style="color:#8b949e;font-size:0.85em">' + esc(d.error) + '</span></div>';
+      el.innerHTML = '<div class="card" style="text-align:center;padding:24px"><span class="status-dot status-offline"></span><strong style="color:#f85149">離線</strong><br><span style="color:#8b949e;font-size:0.85em">' + esc(d.error) + '</span></div>' + _backendsHtml;
       return;
     }
     const svc = d.service || {};
@@ -1507,6 +1693,7 @@ async function renderVector() {
     html += '</div>';
 
     html += '</div>';
+    html += _backendsHtml;
     el.innerHTML = html;
   } catch (e) {
     el.innerHTML = '<div class="empty">載入向量服務狀態失敗：' + esc(e.message) + '</div>';
@@ -1819,6 +2006,9 @@ const httpServer = http.createServer((req, res) => {
   }
   if (pathname === "/api/vector-status" && req.method === "GET") {
     return apiVectorStatus(req, res);
+  }
+  if (pathname === "/api/ollama-backends-status" && req.method === "GET") {
+    return apiOllamaBackendsStatus(req, res);
   }
   if (pathname === "/api/knowledge-queue" && req.method === "GET") {
     return apiKnowledgeQueue(req, res);

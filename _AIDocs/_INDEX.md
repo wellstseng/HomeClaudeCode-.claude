@@ -1,7 +1,7 @@
 # MyClaudeCode (.claude) — AI 分析文件索引
 
 > 本資料夾記錄 `~/.claude` 自訂擴充系統的架構與演進。
-> 最近更新：2026-03-30
+> 最近更新：2026-04-01
 
 ---
 
@@ -15,6 +15,7 @@
 | 4 | _CHANGELOG_ARCHIVE.md | 變更記錄封存 | 歷史變更, 舊版記錄 |
 | 5 | ../README.md | 完整運作知識庫 + 7 階段流程圖（GitHub 入口） | 設計哲學, 安裝, 入門, 流程圖, 使用方式 |
 | 6 | DocIndex-System.md | 全檔系統索引（啟動鏈 + Hook 模組 + 16 Skills + Tools + Memory 25 atoms） | 啟動鏈, lifecycle, 全檔索引, 檔案清單, 系統索引 |
+| 7 | ClaudeCodeInternals/_INDEX.md | Claude Code 原生架構深度分析（14 章：Harness Engineering 全書） | claude code 架構, harness engineering, tool system, hook system, agent, permission, prompt, MCP, skill, plugin, feature flag, query loop, context, state |
 
 ---
 

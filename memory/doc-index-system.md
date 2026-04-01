@@ -7,7 +7,7 @@
 - Last-used: 2026-03-31
 - Updated: 2026-03-23
 - Created: 2026-03-13
-- Confirmations: 65
+- Confirmations: 66
 - Tags: doc-index, system-overview
 - Related: decisions, decisions-architecture, toolchain, feedback-memory-path
 
