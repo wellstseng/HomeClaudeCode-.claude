@@ -6,6 +6,9 @@
 
 | 日期 | 變更 | 涉及檔案 |
 |------|------|---------|
+| 2026-03-27 | **V2.21 Phase 3 專案自治層建置**：`init-project` skill 新增 Step 6 建立 `.claude/` 自治層。`workflow-guardian.py` 新增 `_call_project_hook()` subprocess 隔離呼叫 | `commands/init-project.md`, `hooks/workflow-guardian.py` |
+| 2026-03-27 | **V2.21 Phase 2 Project Registry + 路徑切換**：`register_project()` + registry 管理。`find_project_root()` 加 `.claude/memory/MEMORY.md` 辨識。`get_project_memory_dir()` 新路徑優先 | `hooks/wg_paths.py`, `hooks/workflow-guardian.py`, `hooks/wg_atoms.py`, `tools/workflow-guardian-mcp/server.js` |
+| 2026-03-27 | **V2.20 Phase 0.3 C2 修復**：`_truncate_context_by_activation` 加 `source_dirs` 參數修正專案層 ACT-R score 永遠 -10.0 問題 | `hooks/wg_atoms.py`, `hooks/workflow-guardian.py` |
 | 2026-03-24 | **V2.18 Phase 2 Section-Level 注入**：向量服務新增 `ranked_search_sections()` + `/search/ranked-sections` endpoint。`_semantic_search()` 回傳帶 sections。注入迴圈新增 section 提取（`_extract_sections()`），大 atom 省 69-87% tokens。安全防護：0 匹配/70% 閾值/服務不可用皆 fallback 全量注入 | `searcher.py`, `service.py`, `wg_intent.py`, `wg_atoms.py`, `workflow-guardian.py` |
 | 2026-03-23 | **V2.18 Phase 0+1**：環境清理（LanceDB 289→25MB、刪 7 死檔）+ 9 atom Trigger 精準化 + misdiagnosis/harvester 內容精簡 | `memory/*.md`, `MEMORY.md`, `workflow/config.json` |
 | 2026-03-23 | **V2.17 合併升級**：V2.16 自我迭代自動化 + V2.17 覆轍偵測 + AIDocs 內容閘門 + WebFetch Guard | `hooks/workflow-guardian.py`, `settings.json`, `rules/aidocs.md`, `memory/decisions*.md`, `CLAUDE.md`, `README.md`, `_AIDocs/*.md` |

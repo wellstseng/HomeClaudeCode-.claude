@@ -44,15 +44,15 @@
 - [固] 反思指標：over_engineering_rate + silence_accuracy
 - [固] Bayesian 校準：architecture 連續 3+ 失敗 → 提升 arch 敏感度
 
-### 自我迭代自動化（V2.16）
+### 自我迭代自動化
 - [固] 衰減分數 + 自動晉升（Confirmations ≥ 20）+ 震盪持久化 + archive candidates
 - → 詳細公式與參數見 `_reference/SPEC_impl_params.md`
 
-### 覆轍偵測（V2.17）
+### 覆轍偵測
 - [固] 寄生式：附著在 episodic atom，SessionEnd 寫信號 → SessionStart 跨 session 偵測
 - [固] 職責切分：session 內重試 → fix-escalation；atom 反覆修改 → 震盪偵測；跨 session 行為模式 → 覆轍偵測
 
-### Section-Level 注入（V2.18）
+### Section-Level 注入
 - [固] `ranked_search_sections()`：groupby atom 保留 top-3 chunks，回傳 `sections: [{section, text, score, line_number}]`
 - [固] `_semantic_search()` 4-tuple 回傳：`(name, path, triggers, sections)`，先試 `/search/ranked-sections`，404 fallback `/search/ranked`
 - [固] `_extract_sections()`：regex 解析 `##`/`###` section map → 匹配 hints（精確+子字串 fuzzy）→ 保留 atom 標題 + Related 行 + 匹配 sections
@@ -71,13 +71,3 @@
 - 修改 hook/tool 前確認此處記載的參數值
 - 新增基礎設施時更新對應段落
 
-## 演化日誌
-
-| 日期 | 變更 | 來源 |
-|------|------|------|
-| 2026-03-19 | 從 decisions.md 拆出技術細節 | 系統精修 |
-| 2026-03-19 | 新增 Token Diet V2.14 段落（7 條 [固]） | V2.14 驗證 |
-| 2026-03-22 | 新增自我迭代自動化（V2.16）段落（7 條 [固]） | V2.16 文件同步 |
-| 2026-03-22 | 新增覆轍偵測（V2.17）段落（4 條 [觀]） | 覆轍偵測實作 |
-| 2026-03-23 | V2.17 合併升級至公司電腦 | 跨機合併 |
-| 2026-03-24 | 新增 Section-Level 注入（V2.18）段落（6 條 [固]） | Phase 2 實作 |
