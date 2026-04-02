@@ -6,6 +6,10 @@
 
 | 日期 | 變更 | 涉及檔案 |
 |------|------|---------|
+| 2026-03-30 | **全面清理 + V2.21 自治修正**：修復 2 處硬編碼 + 刪除 backups/Logs/debug + 清理孤兒 slugs | `hooks/workflow-guardian.py`, `settings.json`, `_AIDocs/`, `memory/_reference/` |
+| 2026-03-30 | **Dashboard 4 修復 + 版本集中化** | `tools/workflow-guardian-mcp/server.js`, `version.json` |
+| 2026-03-27 | **V2.21 Phase 7 Skills/Tools 專案層支援** | `tools/memory-audit.py`, `tools/memory-conflict-detector.py`, `commands/*.md`, `server.js` |
+| 2026-03-27 | **文件版本同步 V2.21** | `README.md`, `Install-forAI.md`, `memory/_reference/*`, `memory/MEMORY.md` |
 | 2026-03-27 | **V2.21 Phase 3 專案自治層建置**：`init-project` skill 新增 Step 6 建立 `.claude/` 自治層。`workflow-guardian.py` 新增 `_call_project_hook()` subprocess 隔離呼叫 | `commands/init-project.md`, `hooks/workflow-guardian.py` |
 | 2026-03-27 | **V2.21 Phase 2 Project Registry + 路徑切換**：`register_project()` + registry 管理。`find_project_root()` 加 `.claude/memory/MEMORY.md` 辨識。`get_project_memory_dir()` 新路徑優先 | `hooks/wg_paths.py`, `hooks/workflow-guardian.py`, `hooks/wg_atoms.py`, `tools/workflow-guardian-mcp/server.js` |
 | 2026-03-27 | **V2.20 Phase 0.3 C2 修復**：`_truncate_context_by_activation` 加 `source_dirs` 參數修正專案層 ACT-R score 永遠 -10.0 問題 | `hooks/wg_atoms.py`, `hooks/workflow-guardian.py` |
