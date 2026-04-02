@@ -4,7 +4,7 @@
 - Confidence: [固]
 - Trigger: 全域決策, workflow, guardian, hooks, MCP, 記憶系統決策, 記憶系統架構, 記憶系統, 原子記憶, atom memory, 決策
 - Last-used: 2026-04-02
-- Confirmations: 127
+- Confirmations: 129
 - Related: decisions-architecture
 
 ## 知識
@@ -13,10 +13,6 @@
 - [固] 雙 LLM：Claude Code（雲端決策）+ Ollama（本地語意處理）
 - [固] 專案自治層：每專案 `{project_root}/.claude/memory/` + project_hooks.py delegate
 - [固] 管線概覽：Intent→Trigger→Vector→Section→Budget→注入（詳見 _reference/internal-pipeline.md）
-
-### 記憶檢索
-- [固] UserPromptSubmit: Intent 分類 → Trigger 匹配 → Vector Search → Ranked Merge → additionalContext
-- [固] 索引 2 層：global → project，`**/*.md` 遞迴掃描 + `_` 前綴目錄跳過
 
 ### V3 三層即時管線
 - [觀] Stop async hook（quick-extract.py）→ qwen3:1.7b 快篩 5s → hot_cache.json → systemMessage

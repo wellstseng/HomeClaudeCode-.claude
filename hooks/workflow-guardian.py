@@ -410,6 +410,23 @@ except Exception:
     sys.exit(0)
 
 
+def _is_memory_system_dev(prompt_lower: str, cwd: str) -> bool:
+    """嚴格判斷是否為記憶系統開發場景。需 2+ 命中或 CWD 匹配。"""
+    # Rule 1: CWD 在 hooks/tools 目錄下 → 直接觸發
+    cwd_norm = cwd.replace("\\", "/")
+    if "/.claude/hooks" in cwd_norm or "/.claude/tools" in cwd_norm:
+        return True
+    # Rule 2: 複合關鍵詞（需 2+ 命中）
+    MEM_KEYWORDS = [
+        "workflow-guardian", "wg_", "atom memory", "原子記憶",
+        "wisdom_engine", "記憶系統", "memory system",
+        "hot_cache", "extract-worker", "vector service",
+        "hook pipeline", "萃取管線", "注入管線",
+    ]
+    hits = sum(1 for kw in MEM_KEYWORDS if kw in prompt_lower)
+    return hits >= 2
+
+
 def handle_user_prompt_submit(
     input_data: Dict[str, Any], config: Dict[str, Any]
 ) -> None:
@@ -519,6 +536,20 @@ def handle_user_prompt_submit(
                 doc_path = f"_AIDocs/{doc}" if aidocs_root else doc
                 pointer_lines.append(f"  \u2192 Read `{doc_path}` \u2014 {desc[:80]}")
             lines.extend(pointer_lines)
+
+    # ── V3.1: JIT load internal pipeline reference for memory system dev ──
+    if _is_memory_system_dev(prompt_lower, state.get("session", {}).get("cwd", "")):
+        ref_path = MEMORY_DIR / "_reference" / "internal-pipeline.md"
+        if ref_path.exists():
+            try:
+                ref_text = ref_path.read_text(encoding="utf-8")
+                ref_tokens = len(ref_text) // 4
+                jit_budget = min(ref_tokens, 250)
+                if jit_budget <= budget:
+                    lines.append(f"[JIT:InternalPipeline]\n{ref_text[:jit_budget * 4]}")
+                    budget -= jit_budget
+            except (OSError, UnicodeDecodeError):
+                pass
 
     # ─── Phase 1: Atom auto-injection (Trigger matching) ─────────────
     atom_index = state.get("atom_index", {})
