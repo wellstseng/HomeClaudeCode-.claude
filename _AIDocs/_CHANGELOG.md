@@ -7,7 +7,7 @@
 ## 2026-04-02 V3.0 三層即時管線 + 文件全面升級
 - 新增 hot_cache.json 快篩快取機制（quick-extract.py → PostToolUse/UPS 即時注入）
 - 新增 SessionStart 去重（同 cwd 60s 內複用 state）
-- 新增分層孤兒清理（10m/30m/24h TTL）
+- 新增分層孤兒清理（10m/30m/1h-done-synced/4h-done-pending TTL，SessionStart+SessionEnd 雙觸發）
 - 新增 vector_ready.flag 非阻塞啟動
 - 文件全面升級 V2.21 → V3.0（README, Install-forAI, Architecture, _INDEX, Project_File_Tree, 7 commands, CLAUDE.md）
 

@@ -316,6 +316,12 @@ def handle_session_start(input_data: Dict[str, Any], config: Dict[str, Any]) -> 
     # CRITICAL: write state before any output so subsequent hooks can read it.
     write_state(session_id, state)
 
+    # V3/2.2A: Clean up stale state files on every SessionStart
+    try:
+        _cleanup_old_states()
+    except Exception as e:
+        print(f"[v3] SessionStart cleanup error: {e}", file=sys.stderr)
+
     # V3/1.5C: Clear vector_ready.flag (will be re-created by background process)
     try:
         (WORKFLOW_DIR / "vector_ready.flag").unlink(missing_ok=True)
@@ -1159,13 +1165,14 @@ def handle_stop(input_data: Dict[str, Any], config: Dict[str, Any]) -> None:
 
 
 def _cleanup_old_states() -> None:
-    """V3/1.5B: Tiered TTL cleanup for state files.
+    """V3/2.2A: Tiered TTL cleanup for state files.
 
     - age < 600s (10m): always keep (protect fresh states)
     - merged_into + > 600s: delete
     - prompt_count=0 + working + > 600s: delete (empty startup)
     - prompt_count>0 + working + > 1800s (30m): delete (orphaned)
-    - done + > 86400s (24h): delete
+    - done + sync_pending=false + > 3600s (1h): delete (synced, no value)
+    - done + sync_pending=true + > 14400s (4h): delete (stale pending)
     - fallback > 7d: delete
     """
     now = time.time()
@@ -1188,6 +1195,7 @@ def _cleanup_old_states() -> None:
             phase = data.get("phase", "")
             prompt_count = data.get("topic_tracker", {}).get("prompt_count", 0)
             merged = data.get("merged_into")
+            sync_pending = data.get("sync_pending", False)
 
             if merged and age > 600:
                 f.unlink(missing_ok=True)
@@ -1195,7 +1203,9 @@ def _cleanup_old_states() -> None:
                 f.unlink(missing_ok=True)
             elif prompt_count > 0 and phase == "working" and age > 1800:
                 f.unlink(missing_ok=True)
-            elif phase == "done" and age > 86400:
+            elif phase == "done" and not sync_pending and age > 3600:
+                f.unlink(missing_ok=True)
+            elif phase == "done" and sync_pending and age > 14400:
                 f.unlink(missing_ok=True)
             elif age > 7 * 86400:
                 f.unlink(missing_ok=True)
@@ -1213,11 +1223,11 @@ def handle_session_end(input_data: Dict[str, Any], config: Dict[str, Any]) -> No
     state["ended_at"] = _now_iso()
     state["phase"] = "done"
 
-    # W10: Clean up stale state files (older than 7 days)
+    # W10/V3-2.2A: Clean up stale state files (tiered TTL)
     try:
         _cleanup_old_states()
     except Exception as e:
-        print(f"[v2.20] State cleanup error: {e}", file=sys.stderr)
+        print(f"[v3] SessionEnd cleanup error: {e}", file=sys.stderr)
 
     # ─── Spawn extract-worker.py as detached subprocess (V2.12) ─────────
     rc = config.get("response_capture", {})

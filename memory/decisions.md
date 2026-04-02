@@ -4,7 +4,7 @@
 - Confidence: [固]
 - Trigger: 全域決策, workflow, guardian, hooks, MCP, 記憶系統決策, 記憶系統架構, 記憶系統, 原子記憶, atom memory, 決策
 - Last-used: 2026-04-02
-- Confirmations: 124
+- Confirmations: 125
 - Related: decisions-architecture
 
 ## 知識
@@ -33,7 +33,8 @@
 
 ### SessionStart 風暴修復
 - [觀] SessionStart 去重: 同 cwd 60s 內 active state → 複用（resume 合併，startup 跳過 vector init）
-- [觀] 孤兒清理分層 TTL: prompt_count=0 working→10m, prompt_count>0 working→30m, done→24h
+- [觀] 孤兒清理分層 TTL: prompt_count=0 working→10m, prompt_count>0 working→30m, done+已同步→1h, done+待同步→4h
+- [觀] 清理觸發點: SessionStart + SessionEnd 雙觸發（避免非正常結束時殘留累積）
 - [觀] Vector service 非阻塞: fire-and-forget subprocess + vector_ready.flag
 
 ### 跨 Session 鞏固
