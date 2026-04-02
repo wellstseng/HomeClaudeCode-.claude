@@ -214,6 +214,8 @@ function listAllSessions() {
         age_minutes: Math.round(ageMs / 60000),
         ended: !!state.ended_at,
         muted: !!state.muted,
+        merged_into: state.merged_into || null,
+        skip_vector_init: !!state._skip_vector_init,
       };
     } catch {
       return null;
@@ -1037,6 +1039,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   .badge-working { background: #f0883e33; color: #f0883e; }
   .badge-syncing { background: #d2a82633; color: #d2a826; }
   .badge-done { background: #23863633; color: #3fb950; }
+  .badge-merged { background: #a371f733; color: #a371f7; }
   .card-meta { font-size: 0.8em; color: #8b949e; margin-bottom: 8px; }
   .card-stats { display: flex; gap: 16px; font-size: 0.85em; }
   .card-stats span { color: #8b949e; }
@@ -1153,6 +1156,16 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   .proj-alias { font-size: 0.8em; color: #8b949e; }
   .proj-filter-btn { background: none; border: 1px solid #30363d; color: #58a6ff; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-family: inherit; }
   .proj-filter-btn:hover { background: #58a6ff22; }
+  .hot-cache-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; display: flex; align-items: center; gap: 12px; font-size: 0.85em; }
+  .hot-cache-card.has-cache { border-color: #3fb95066; }
+  .hot-cache-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .hot-cache-dot.green { background: #3fb950; }
+  .hot-cache-dot.gray { background: #484f58; }
+  .vector-indicator { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; padding: 2px 8px; border-radius: 4px; font-size: 0.8em; }
+  .vector-indicator:hover { background: #30363d; }
+  .vector-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+  .vector-dot.ready { background: #3fb950; }
+  .vector-dot.not-ready { background: #f85149; }
 </style>
 </head>
 <body>
@@ -1162,6 +1175,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
 </div>
 
 <div class="stats" id="statsBar"></div>
+<div id="hotCacheCard" class="hot-cache-card" style="display:none"></div>
 
 <nav class="tab-nav">
   <button class="tab-btn active" data-tab="sessions">對話</button>
@@ -1211,6 +1225,11 @@ let refreshTimer;
 let currentTab = "sessions";
 let testJobId = null;
 let testPollTimer = null;
+
+function switchTab(name) {
+  const btn = document.querySelector('[data-tab="' + name + '"]');
+  if (btn) btn.click();
+}
 
 // ─── Tab Switching ───
 
@@ -1273,10 +1292,12 @@ function clsBadge(c) {
 function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 
 async function renderSessions() {
-  const sessions = await fetchSessions();
+  const [sessions, vecReady] = await Promise.all([fetchSessions(), fetchVectorReady()]);
   const active = sessions.filter(s => !s.ended);
   const pending = sessions.filter(s => s.sync_pending && !s.ended);
-  updateStats(sessions.length, active.length, pending.length);
+  const vecHtml = '<div class="stat"><div class="vector-indicator" onclick="switchTab(\\'vector\\')"><span class="vector-dot ' + (vecReady?"ready":"not-ready") + '"></span> Vector</div></div>';
+  updateStats(sessions.length, active.length, pending.length, vecHtml);
+  renderHotCache();
 
   if (sessions.length === 0) {
     document.getElementById("sessionList").innerHTML = '<div class="empty">無進行中的對話。</div>';
@@ -1302,7 +1323,7 @@ async function renderSessions() {
     }
     return '<div class="card">' +
       '<div class="card-header"><span class="card-name">' + esc(s.name||"?") + '</span><span class="' + badgeClass(s.phase) + '">' + s.phase + (s.muted?" (已靜音)":"") + '</span></div>' +
-      '<div class="card-meta"><span class="card-id">' + s.session_id.slice(0,8) + '</span> &middot; ' + esc(s.project||"?") + ' &middot; ' + s.age_minutes + ' 分鐘' + (s.ended?" &middot; 已結束":"") + '</div>' +
+      '<div class="card-meta"><span class="card-id">' + s.session_id.slice(0,8) + '</span> &middot; ' + esc(s.project||"?") + ' &middot; ' + s.age_minutes + ' 分鐘' + (s.ended?" &middot; 已結束":"") + (s.merged_into?' &middot; <span style="color:#a371f7">已合併至 '+s.merged_into.slice(0,8)+'</span>':"") + '</div>' +
       '<div class="card-stats"><span>檔案：<strong>' + s.modified_files_count + '</strong></span><span>知識：<strong>' + s.knowledge_queue_count + '</strong></span><span>同步：<strong>' + (s.sync_pending?"待處理":"完成") + '</strong></span></div>' +
       (fileHtml||kqHtml ? '<div class="details">' + fileHtml + kqHtml + '</div>' : '') +
       '<div class="actions">' +
@@ -1323,6 +1344,37 @@ function updateStats(total, active, pending, extra) {
     '<div class="stat"><div class="stat-value">' + pending + '</div><div class="stat-label">待同步</div></div>';
   if (extra) html += extra;
   document.getElementById("statsBar").innerHTML = html;
+}
+
+// ─── V3: Hot Cache Card ───
+
+async function renderHotCache() {
+  const el = document.getElementById("hotCacheCard");
+  try {
+    const data = await (await fetch("/api/hot-cache")).json();
+    if (data.empty) { el.style.display = "none"; return; }
+    const hasUninjected = !data.injected && (data.knowledge||[]).length > 0;
+    el.className = "hot-cache-card" + (hasUninjected ? " has-cache" : "");
+    el.style.display = "flex";
+    const ageMin = Math.round((data.age_seconds||0) / 60);
+    const ageStr = ageMin < 1 ? "<1 分鐘" : ageMin + " 分鐘前";
+    el.innerHTML =
+      '<span class="hot-cache-dot ' + (hasUninjected ? "green" : "gray") + '"></span>' +
+      '<span><strong>Hot Cache</strong></span>' +
+      '<span>來源: ' + (data.source||"?") + '</span>' +
+      '<span>知識: ' + (data.knowledge||[]).length + ' 條</span>' +
+      '<span>注入: ' + (data.injected ? "已注入" : "待注入") + '</span>' +
+      '<span style="color:#8b949e">' + ageStr + '</span>';
+  } catch { el.style.display = "none"; }
+}
+
+// ─── V3: Vector Ready Indicator ───
+
+async function fetchVectorReady() {
+  try {
+    const data = await (await fetch("/api/vector-ready")).json();
+    return data.ready;
+  } catch { return false; }
 }
 
 // ─── Episodic Timeline ───
@@ -1373,9 +1425,11 @@ async function renderEpisodic() {
 
 let lastHealthData = null;
 
+let _healthInfoVisible = false;
 function toggleHealthInfo() {
+  _healthInfoVisible = !_healthInfoVisible;
   document.querySelectorAll('.health-info-row').forEach(r => {
-    r.style.display = r.style.display === 'none' ? '' : 'none';
+    r.style.display = _healthInfoVisible ? '' : 'none';
   });
 }
 
@@ -1417,7 +1471,7 @@ async function renderHealth(force) {
         '</div>';
       html += '<table class="issue-table"><tr><th>等級</th><th>分類</th><th>檔案</th><th>訊息</th></tr>';
       for (const i of issues) {
-        const hideClass = i.level === "info" ? ' class="health-info-row" style="display:none"' : '';
+        const hideClass = i.level === "info" ? ' class="health-info-row" style="display:' + (_healthInfoVisible ? '' : 'none') + '"' : '';
         html += '<tr' + hideClass + '><td class="level-' + i.level + '">' + i.level + '</td><td>' + esc(i.category) + '</td><td style="font-family:monospace;font-size:0.85em">' + esc(i.file) + '</td><td>' + esc(i.message) + '</td></tr>';
       }
       html += '</table>';
@@ -2018,6 +2072,29 @@ const httpServer = http.createServer((req, res) => {
   }
   if (pathname === "/api/projects" && req.method === "GET") {
     return apiProjects(req, res);
+  }
+
+  // ── V3: Hot Cache status ──
+  if (pathname === "/api/hot-cache" && req.method === "GET") {
+    const cachePath = path.join(WORKFLOW_DIR, "hot_cache.json");
+    try {
+      const raw = fs.readFileSync(cachePath, "utf-8");
+      const data = JSON.parse(raw);
+      data.age_seconds = Math.round(Date.now() / 1000 - (data.timestamp || 0));
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify(data));
+    } catch {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ empty: true }));
+    }
+  }
+
+  // ── V3: Vector Ready indicator ──
+  if (pathname === "/api/vector-ready" && req.method === "GET") {
+    const flagPath = path.join(WORKFLOW_DIR, "vector_ready.flag");
+    const ready = fs.existsSync(flagPath);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify({ ready }));
   }
 
   res.writeHead(404);

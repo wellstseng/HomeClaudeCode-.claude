@@ -4,7 +4,7 @@
 - Confidence: [固]
 - Trigger: 寫入記憶, 暫存, _staging, memory path, 寫atom, 寫檔案, Write memory
 - Last-used: 2026-04-02
-- Confirmations: 13
+- Confirmations: 14
 - Related: decisions
 
 ## 知識
