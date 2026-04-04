@@ -3,8 +3,8 @@
 - Scope: global
 - Confidence: [固]
 - Trigger: Node.js, NodeJS, npm, npx, package.json, node_modules, TypeScript, tsc, pm2, ecosystem.config, JavaScript, JS, TS, ESM, CommonJS, CJS
-- Last-used: 2026-04-02
-- Confirmations: 55
+- Last-used: 2026-04-05
+- Confirmations: 75
 - Related: toolchain, fail-env
 
 ## 知識

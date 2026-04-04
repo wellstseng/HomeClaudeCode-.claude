@@ -3,8 +3,8 @@
 - Scope: global
 - Confidence: [固]
 - Trigger: 工具鏈, 環境設定, bash指令, command, bash, git, python, npm
-- Last-used: 2026-04-02
-- Confirmations: 153
+- Last-used: 2026-04-04
+- Confirmations: 158
 - Type: procedural
 - Tags: toolchain, environment, commands
 - Related: toolchain-ollama, decisions-architecture, feedback_global_install
@@ -57,6 +57,17 @@
 - [固] **禁用 npx 啟動**：`cmd /c npx` 在 VSCode 擴充環境不穩定，MCP server 會無法啟動
 - [固] 入口查找：`package.json` 的 `bin` 欄位確認 entry point
 - [固] 範本：`"command": "C:\\Program Files\\nodejs\\node.exe", "args": ["C:\\Users\\holylight\\AppData\\Roaming\\npm\\node_modules\\{pkg}\\dist\\{entry}.js"]`
+
+### CatClaw Dashboard API（朱蒂可直接操作）
+
+- [固] CatClaw Dashboard 預設 `localhost:8088`，無 token 驗證（本地）
+- [固] **清除 session**：`curl -s -X POST http://localhost:8088/api/sessions/clear -H 'Content-Type: application/json' -d '{"sessionKey":"SESSION_KEY"}'`
+- [固] **刪除 session**：`curl -s -X POST http://localhost:8088/api/sessions/delete -H 'Content-Type: application/json' -d '{"sessionKey":"SESSION_KEY"}'`
+- [固] **列出 sessions**：`curl -s http://localhost:8088/api/sessions | python3 -c "import sys,json; ..."`
+- [固] **強制壓縮**：`POST /api/sessions/compact` body: `{"sessionKey":"..."}`
+- [固] **清除過期**：`POST /api/sessions/purge-expired`
+- [固] **重啟**：`POST /api/restart`
+- [固] 朱蒂（Claude Code）可以且應該主動使用這些 API 管理 CatClaw sessions，不要說「做不到」
 
 ### 環境特殊配置
 
